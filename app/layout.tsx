@@ -4,6 +4,7 @@ import './globals.css';
 import { AuthProvider } from '@/components/AuthProvider';
 import { Header } from '@/components/Header';
 import { TickerBar } from '@/components/TickerBar';
+import { TabNav } from '@/components/TabNav';
 
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="flex flex-col min-h-screen">
             <TickerBar />
             <Header />
+            <TabNav />
             <main className="flex-1">{children}</main>
           </div>
         </AuthProvider>

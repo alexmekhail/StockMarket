@@ -65,6 +65,26 @@ export async function fetchBars(
   return data.bars ?? [];
 }
 
+export async function fetchGeneralNews(limit = 20): Promise<NewsArticle[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(
+    `${DATA_V1B1}/news?${params}`,
+    { headers: alpacaHeaders(), next: { revalidate: 300 } }
+  );
+  if (!res.ok) throw new Error(`Alpaca news error: ${res.status}`);
+  const data = await res.json();
+  return (data.news ?? []).map((item: any): NewsArticle => ({
+    id: item.id,
+    headline: item.headline,
+    author: item.author ?? '',
+    source: item.source ?? '',
+    url: item.url,
+    createdAt: item.created_at,
+    summary: item.summary ?? '',
+    symbols: item.symbols ?? [],
+  }));
+}
+
 export async function fetchNews(symbol: string, limit = 15): Promise<NewsArticle[]> {
   const params = new URLSearchParams({
     symbols: symbol,
