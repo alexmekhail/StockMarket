@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { searchTickers } from '@/lib/tickers';
+import type { TickerInfo } from '@/lib/tickers';
 
 interface AddPositionModalProps {
   onClose: () => void;
@@ -16,6 +18,43 @@ export function AddPositionModal({ onClose, onSuccess, editTicker, editShares, e
   const [avgPrice, setAvgPrice] = useState(editAvgPrice?.toString() ?? '');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<TickerInfo[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (ticker.length === 0) {
+      setSuggestions([]);
+      return;
+    }
+    const results = searchTickers(ticker);
+    setSuggestions(results);
+    setHighlightIndex(-1);
+  }, [ticker]);
+
+  function selectTicker(info: TickerInfo) {
+    setTicker(info.symbol);
+    setSuggestions([]);
+    setShowSuggestions(false);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!showSuggestions || suggestions.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.max(i - 1, -1));
+    } else if (e.key === 'Enter' && highlightIndex >= 0) {
+      e.preventDefault();
+      selectTicker(suggestions[highlightIndex]);
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,18 +95,47 @@ export function AddPositionModal({ onClose, onSuccess, editTicker, editShares, e
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-text-muted text-xs font-mono uppercase tracking-wider mb-1.5">Ticker</label>
+          {/* Ticker with autocomplete */}
+          <div className="relative">
+            <label className="block text-text-muted text-xs font-mono uppercase tracking-wider mb-1.5">
+              Ticker / Company
+            </label>
             <input
+              ref={inputRef}
               type="text"
               value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onChange={(e) => { setTicker(e.target.value.toUpperCase()); setShowSuggestions(true); }}
+              onFocus={() => setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+              onKeyDown={handleKeyDown}
               disabled={!!editTicker}
               required
               maxLength={10}
-              className="w-full bg-bg-tertiary border border-border rounded px-3 py-2 text-text-primary text-sm font-mono focus:outline-none focus:border-accent disabled:opacity-50 uppercase tracking-widest"
+              placeholder="e.g. AAPL or Apple"
+              className="w-full bg-bg-tertiary border border-border rounded px-3 py-2 text-text-primary text-sm font-mono focus:outline-none focus:border-accent disabled:opacity-50 uppercase tracking-widest placeholder:normal-case placeholder:tracking-normal"
             />
+            {showSuggestions && suggestions.length > 0 && (
+              <div
+                ref={dropdownRef}
+                className="absolute top-full left-0 right-0 mt-1 bg-bg-secondary border border-border rounded shadow-xl z-50 overflow-hidden"
+              >
+                {suggestions.map((s, i) => (
+                  <button
+                    key={s.symbol}
+                    type="button"
+                    onMouseDown={() => selectTicker(s)}
+                    className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 transition-colors ${
+                      i === highlightIndex ? 'bg-bg-hover' : 'hover:bg-bg-hover'
+                    }`}
+                  >
+                    <span className="font-mono font-semibold text-sm text-text-primary">{s.symbol}</span>
+                    <span className="font-sans text-xs text-text-muted truncate">{s.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+
           <div>
             <label className="block text-text-muted text-xs font-mono uppercase tracking-wider mb-1.5">Shares</label>
             <input
@@ -77,7 +145,8 @@ export function AddPositionModal({ onClose, onSuccess, editTicker, editShares, e
               required
               min="0.0001"
               step="any"
-              className="w-full bg-bg-tertiary border border-border rounded px-3 py-2 text-text-primary text-sm font-mono focus:outline-none focus:border-accent"
+              placeholder="e.g. 10"
+              className="w-full bg-bg-tertiary border border-border rounded px-3 py-2 text-text-primary text-sm font-mono focus:outline-none focus:border-accent placeholder:text-text-muted"
             />
           </div>
           <div>
@@ -89,7 +158,8 @@ export function AddPositionModal({ onClose, onSuccess, editTicker, editShares, e
               required
               min="0.0001"
               step="any"
-              className="w-full bg-bg-tertiary border border-border rounded px-3 py-2 text-text-primary text-sm font-mono focus:outline-none focus:border-accent"
+              placeholder="e.g. 150.00"
+              className="w-full bg-bg-tertiary border border-border rounded px-3 py-2 text-text-primary text-sm font-mono focus:outline-none focus:border-accent placeholder:text-text-muted"
             />
           </div>
 

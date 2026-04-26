@@ -2,24 +2,27 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchBars } from '@/lib/alpaca';
 import { alpacaBarToChartPoint } from '@/lib/utils';
 import type { TimeRange } from '@/types';
-import { subDays, subMonths, startOfDay, format } from 'date-fns';
 
 function getRangeParams(range: TimeRange): { timeframe: string; start: string; end: string } {
   const now = new Date();
   const end = now.toISOString();
 
   if (range === '1D') {
-    const start = new Date(now);
-    start.setHours(9, 30, 0, 0);
-    // If before market open, use previous day
-    if (now < start) start.setDate(start.getDate() - 1);
+    // Go back ~26 hours to capture the full latest trading session regardless of timezone.
+    // The IEX feed returns minute bars only during market hours so we'll always get
+    // a clean single day of data even with a larger window.
+    const start = new Date(now.getTime() - 26 * 60 * 60 * 1000);
     return { timeframe: '1Min', start: start.toISOString(), end };
   }
+
   if (range === '1W') {
-    return { timeframe: '15Min', start: subDays(now, 7).toISOString(), end };
+    const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return { timeframe: '15Min', start: start.toISOString(), end };
   }
+
   // 1M
-  return { timeframe: '1Day', start: subMonths(now, 1).toISOString(), end };
+  const start = new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000);
+  return { timeframe: '1Day', start: start.toISOString(), end };
 }
 
 export async function GET(
@@ -32,7 +35,10 @@ export async function GET(
   try {
     const { timeframe, start, end } = getRangeParams(range);
     const bars = await fetchBars(ticker, timeframe, start, end);
-    const chartData = bars.map(alpacaBarToChartPoint);
+    const chartData = bars
+      .map(alpacaBarToChartPoint)
+      .sort((a, b) => a.time - b.time);
+
     return NextResponse.json({ chartData, bars }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error(`[/api/stock/${ticker}/bars]`, err);
