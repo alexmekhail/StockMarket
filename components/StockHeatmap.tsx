@@ -92,38 +92,72 @@ const CANVAS_H   = 600;
 const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
 
 /* ─── nested layout ───────────────────────────────────────────────────────── */
-function buildLayout(W: number, H: number): SectorBlock[] {
-  // Pass 1: squarify sectors themselves so they form a 2-D mosaic, not parallel columns
-  const sectorPositions = squarify(
-    SECTORS.map(s => ({
-      id: s.name,
-      value: s.stocks.reduce((sum, t) => sum + sqrtMC(t.mc), 0),
-    })),
-    { x: 0, y: 0, w: W, h: H },
-  );
+interface SectorWithWeight extends SectorDef { weight: number }
+type Rect = { x: number; y: number; w: number; h: number };
 
-  // Pass 2: inside each sector rectangle, squarify the individual stocks
-  return SECTORS.map(sector => {
-    const sp = sectorPositions.find(p => p.id === sector.name);
-    if (!sp || sp.w < 2 || sp.h < 2) {
-      return { name: sector.name, short: sector.short, x: 0, y: 0, w: 0, h: 0, tiles: [] };
+/**
+ * Recursive binary partition — guarantees a 2-D mosaic for the sector layer.
+ * Splits the current rectangle along its longer axis, proportional to the
+ * cumulative weight of each group, then recurses until each sector occupies
+ * its own sub-rectangle. Squarify is still used for stocks *within* each sector.
+ */
+function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[] {
+  if (sectors.length === 0) return [];
+
+  if (sectors.length === 1) {
+    const s = sectors[0];
+    if (rect.w < 2 || rect.h < 2) {
+      return [{ name: s.name, short: s.short, ...rect, tiles: [] }];
     }
-
-    // Inset the sector rect by SECTOR_GAP so sectors have visible breathing room
-    const inner = {
-      x: sp.x + SECTOR_GAP,
-      y: sp.y + SECTOR_GAP,
-      w: sp.w - SECTOR_GAP * 2,
-      h: sp.h - SECTOR_GAP * 2,
+    const inner: Rect = {
+      x: rect.x + SECTOR_GAP,
+      y: rect.y + SECTOR_GAP,
+      w: rect.w - SECTOR_GAP * 2,
+      h: rect.h - SECTOR_GAP * 2,
     };
-
     const tiles = squarify(
-      sector.stocks.map(s => ({ id: s.id, value: sqrtMC(s.mc) })),
+      s.stocks.map(t => ({ id: t.id, value: sqrtMC(t.mc) })),
       inner,
     );
+    return [{ name: s.name, short: s.short, ...rect, tiles }];
+  }
 
-    return { name: sector.name, short: sector.short, ...sp, tiles };
-  });
+  // Find the split index that balances the two groups' weights most evenly
+  const total = sectors.reduce((sum, s) => sum + s.weight, 0);
+  let bestIdx = 1;
+  let bestDiff = Infinity;
+  let acc = 0;
+  for (let i = 0; i < sectors.length - 1; i++) {
+    acc += sectors[i].weight;
+    const diff = Math.abs(acc * 2 - total);
+    if (diff < bestDiff) { bestDiff = diff; bestIdx = i + 1; }
+  }
+
+  const g1 = sectors.slice(0, bestIdx);
+  const g2 = sectors.slice(bestIdx);
+  const w1 = g1.reduce((sum, s) => sum + s.weight, 0);
+  const ratio = w1 / total;
+
+  // Split along the longer dimension
+  if (rect.w >= rect.h) {
+    const split = Math.round(ratio * rect.w);
+    const r1: Rect = { x: rect.x,         y: rect.y, w: split,           h: rect.h };
+    const r2: Rect = { x: rect.x + split,  y: rect.y, w: rect.w - split,  h: rect.h };
+    return [...partitionSectors(g1, r1), ...partitionSectors(g2, r2)];
+  } else {
+    const split = Math.round(ratio * rect.h);
+    const r1: Rect = { x: rect.x, y: rect.y,         w: rect.w, h: split          };
+    const r2: Rect = { x: rect.x, y: rect.y + split,  w: rect.w, h: rect.h - split };
+    return [...partitionSectors(g1, r1), ...partitionSectors(g2, r2)];
+  }
+}
+
+function buildLayout(W: number, H: number): SectorBlock[] {
+  const sorted: SectorWithWeight[] = SECTORS
+    .map(s => ({ ...s, weight: s.stocks.reduce((sum, t) => sum + sqrtMC(t.mc), 0) }))
+    .sort((a, b) => b.weight - a.weight);
+
+  return partitionSectors(sorted, { x: 0, y: 0, w: W, h: H });
 }
 
 /* ─── colour scale ────────────────────────────────────────────────────────── */
