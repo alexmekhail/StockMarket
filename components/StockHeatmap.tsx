@@ -10,9 +10,13 @@ import { formatPrice } from '@/lib/utils';
 interface StockEntry  { id: string; mc: number }
 interface SectorDef   { name: string; short: string; stocks: StockEntry[] }
 interface Tile        { id: string; x: number; y: number; w: number; h: number }
-interface SectorBlock { name: string; short: string; x: number; w: number; tiles: Tile[] }
+interface SectorBlock {
+  name: string; short: string;
+  x: number; y: number; w: number; h: number;
+  tiles: Tile[];
+}
 
-/* ─── sectors ─────────────────────────────────────────────────────────────── */
+/* ─── sectors (GICS-style) ────────────────────────────────────────────────── */
 const SECTORS: SectorDef[] = [
   {
     name: 'Technology', short: 'Tech',
@@ -80,79 +84,86 @@ const SECTORS: SectorDef[] = [
   },
 ];
 
-const ALL_TICKERS  = SECTORS.flatMap(s => s.stocks.map(t => t.id));
-const sqrtMC       = (mc: number) => Math.sqrt(mc);
-const TOTAL_SQRT   = SECTORS.flatMap(s => s.stocks).reduce((sum, s) => sum + sqrtMC(s.mc), 0);
-const CANVAS_H     = 600; // match TradingView widget height
+const ALL_TICKERS = SECTORS.flatMap(s => s.stocks.map(t => t.id));
+const sqrtMC = (mc: number) => Math.sqrt(mc);
 
-/* ─── color scale (matches TradingView palette) ───────────────────────────── */
-function tileBg(pct: number): string {
-  const v = Math.max(-5, Math.min(5, pct));
-  if (Math.abs(v) < 0.05) return '#1a1a2a'; // essentially flat
+/* ─── canvas ──────────────────────────────────────────────────────────────── */
+const CANVAS_H   = 600;
+const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
 
-  if (v > 0) {
-    const t = v / 5;
-    // dark teal-green → bright kelly green
-    const h = 142;
-    const s = 45 + t * 35;
-    const l = 14 + t * 20;
-    return `hsl(${h},${s}%,${l}%)`;
-  }
-  const t = Math.abs(v) / 5;
-  // dark maroon → bright crimson
-  const h = 4;
-  const s = 50 + t * 30;
-  const l = 13 + t * 18;
-  return `hsl(${h},${s}%,${l}%)`;
-}
+/* ─── nested layout ───────────────────────────────────────────────────────── */
+function buildLayout(W: number, H: number): SectorBlock[] {
+  // Pass 1: squarify sectors themselves so they form a 2-D mosaic, not parallel columns
+  const sectorPositions = squarify(
+    SECTORS.map(s => ({
+      id: s.name,
+      value: s.stocks.reduce((sum, t) => sum + sqrtMC(t.mc), 0),
+    })),
+    { x: 0, y: 0, w: W, h: H },
+  );
 
-function tileFg(pct: number): string {
-  return Math.abs(pct) >= 1.5 ? '#fff' : '#bbb';
-}
-
-/* ─── layout ─────────────────────────────────────────────────────────────── */
-function buildLayout(totalW: number): SectorBlock[] {
-  let x = 0;
+  // Pass 2: inside each sector rectangle, squarify the individual stocks
   return SECTORS.map(sector => {
-    const sectorSqrt = sector.stocks.reduce((s, t) => s + sqrtMC(t.mc), 0);
-    const w          = Math.round((sectorSqrt / TOTAL_SQRT) * totalW);
-    const tiles      = squarify(
+    const sp = sectorPositions.find(p => p.id === sector.name);
+    if (!sp || sp.w < 2 || sp.h < 2) {
+      return { name: sector.name, short: sector.short, x: 0, y: 0, w: 0, h: 0, tiles: [] };
+    }
+
+    // Inset the sector rect by SECTOR_GAP so sectors have visible breathing room
+    const inner = {
+      x: sp.x + SECTOR_GAP,
+      y: sp.y + SECTOR_GAP,
+      w: sp.w - SECTOR_GAP * 2,
+      h: sp.h - SECTOR_GAP * 2,
+    };
+
+    const tiles = squarify(
       sector.stocks.map(s => ({ id: s.id, value: sqrtMC(s.mc) })),
-      { x: 0, y: 0, w, h: CANVAS_H },
-    ).map(t => ({ ...t, x: t.x + x }));
-    const block: SectorBlock = { name: sector.name, short: sector.short, x, w, tiles };
-    x += w;
-    return block;
+      inner,
+    );
+
+    return { name: sector.name, short: sector.short, ...sp, tiles };
   });
 }
 
-/* ─── logo ────────────────────────────────────────────────────────────────── */
+/* ─── colour scale ────────────────────────────────────────────────────────── */
+function tileBg(pct: number): string {
+  const v = Math.max(-5, Math.min(5, pct));
+  if (Math.abs(v) < 0.05) return '#1a1a2a';
+  if (v > 0) {
+    const t = v / 5;
+    return `hsl(142,${45 + t * 35}%,${14 + t * 20}%)`;
+  }
+  const t = Math.abs(v) / 5;
+  return `hsl(4,${50 + t * 30}%,${13 + t * 18}%)`;
+}
+function tileFg(pct: number) { return Math.abs(pct) >= 1.5 ? '#fff' : '#bbb'; }
+
+/* ─── logo (hides itself on 404) ──────────────────────────────────────────── */
 function Logo({ ticker, size }: { ticker: string; size: number }) {
-  const [visible, setVisible] = useState(true);
-  if (!visible) return null;
+  const [ok, setOk] = useState(true);
+  if (!ok) return null;
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={`https://financialmodelingprep.com/image-stock/${ticker}.png`}
-      alt=""
-      width={size} height={size}
-      onError={() => setVisible(false)}
+      alt="" width={size} height={size}
+      onError={() => setOk(false)}
       className="rounded object-contain flex-shrink-0"
       style={{ width: size, height: size }}
     />
   );
 }
 
-/* ─── tooltip ─────────────────────────────────────────────────────────────── */
-interface TooltipState { id: string; x: number; y: number }
-
 /* ─── component ───────────────────────────────────────────────────────────── */
+interface TooltipPos { id: string; cx: number; cy: number }
+
 export function StockHeatmap() {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [canvasW,  setCanvasW]  = useState(0);
   const [snaps,    setSnaps]    = useState<Record<string, Snapshot>>({});
   const [loading,  setLoading]  = useState(true);
-  const [tooltip,  setTooltip]  = useState<TooltipState | null>(null);
+  const [tooltip,  setTooltip]  = useState<TooltipPos | null>(null);
 
   useEffect(() => {
     const el = wrapperRef.current;
@@ -170,11 +181,11 @@ export function StockHeatmap() {
       .finally(() => setLoading(false));
   }, []);
 
-  const layout = canvasW > 0 ? buildLayout(canvasW) : [];
-  const hoverSnap = tooltip ? snaps[tooltip.id] : null;
+  const layout     = canvasW > 0 ? buildLayout(canvasW, CANVAS_H) : [];
+  const hoverSnap  = tooltip ? snaps[tooltip.id] : null;
 
   return (
-    <div className="border border-border rounded overflow-hidden bg-[#0e0e0e]">
+    <div className="border border-border rounded overflow-hidden bg-[#0a0a0a]">
       {/* header */}
       <div className="px-4 py-2.5 border-b border-border bg-bg-tertiary flex items-center justify-between">
         <span className="text-xs font-mono font-semibold text-text-secondary uppercase tracking-wider">
@@ -192,50 +203,48 @@ export function StockHeatmap() {
         style={{ height: CANVAS_H }}
         onMouseLeave={() => setTooltip(null)}
       >
-        {layout.map(sector => (
+        {layout.map(sector => sector.w > 0 && (
           <div key={sector.name}>
 
-            {/* sector label — floating overlay, doesn't steal tile height */}
+            {/* sector name label — floating gradient over the top-left of the block */}
             <div
               style={{
                 position: 'absolute',
-                left: sector.x,
-                top: 0,
-                width: sector.w,
-                height: 22,
-                background: 'linear-gradient(to bottom, rgba(0,0,0,0.72) 0%, transparent 100%)',
-                zIndex: 5,
+                left: sector.x + SECTOR_GAP,
+                top:  sector.y + SECTOR_GAP,
+                width: sector.w - SECTOR_GAP * 2,
+                height: 20,
+                background: 'linear-gradient(to bottom,rgba(0,0,0,.65) 0%,transparent 100%)',
+                zIndex: 6,
                 pointerEvents: 'none',
-                boxSizing: 'border-box',
-                borderRight: '2px solid #000',
               }}
               className="flex items-start pt-1 pl-1.5 overflow-hidden"
             >
-              <span className="font-mono text-[9px] font-semibold text-white/60 uppercase tracking-widest truncate leading-none">
-                {sector.w > 88 ? sector.name : sector.short}
+              <span className="font-mono text-[9px] font-semibold text-white/55 uppercase tracking-widest leading-none truncate">
+                {sector.w > 100 ? sector.name : sector.short}
               </span>
             </div>
 
-            {/* tiles */}
+            {/* stock tiles */}
             {sector.tiles.map(tile => {
               const snap = snaps[tile.id];
               const pct  = snap?.changePercent ?? 0;
               const bg   = loading ? '#181820' : tileBg(pct);
               const fg   = loading ? '#444'    : tileFg(pct);
 
-              const showLogo  = tile.w >= 60 && tile.h >= 52;
+              const showLogo  = tile.w >= 58 && tile.h >= 50;
               const logoSz    = Math.min(Math.floor(Math.min(tile.w, tile.h) * 0.34), 38);
-              const showPrice = tile.w >= 80 && tile.h >= 74;
-              const showPct   = tile.w >= 34 && tile.h >= 26;
-              const showTick  = tile.w >= 22 && tile.h >= 16;
-              const tickSz    = tile.w < 44 ? 8 : tile.w < 65 ? 9 : tile.w < 95 ? 10 : 11;
+              const showPrice = tile.w >= 78 && tile.h >= 72;
+              const showPct   = tile.w >= 32 && tile.h >= 24;
+              const showTick  = tile.w >= 20 && tile.h >= 14;
+              const tickSz    = tile.w < 42 ? 8 : tile.w < 62 ? 9 : tile.w < 90 ? 10 : 11;
 
               return (
                 <Link
                   key={tile.id}
                   href={`/stock/${tile.id}`}
-                  onMouseEnter={e => setTooltip({ id: tile.id, x: e.clientX, y: e.clientY })}
-                  onMouseMove={e  => setTooltip({ id: tile.id, x: e.clientX, y: e.clientY })}
+                  onMouseEnter={e => setTooltip({ id: tile.id, cx: e.clientX, cy: e.clientY })}
+                  onMouseMove={e  => setTooltip({ id: tile.id, cx: e.clientX, cy: e.clientY })}
                   style={{
                     position:        'absolute',
                     left:            tile.x,
@@ -243,10 +252,10 @@ export function StockHeatmap() {
                     width:           tile.w,
                     height:          tile.h,
                     backgroundColor: bg,
-                    border:          '1px solid rgba(0,0,0,0.6)',
+                    border:          '1px solid rgba(0,0,0,.55)',
                     boxSizing:       'border-box',
                   }}
-                  className="flex flex-col items-center justify-center overflow-hidden hover:brightness-[1.15] transition-[filter] z-[1]"
+                  className="flex flex-col items-center justify-center overflow-hidden hover:brightness-110 transition-[filter] z-[1]"
                 >
                   {showLogo  && <Logo ticker={tile.id} size={logoSz} />}
                   {showTick  && (
@@ -258,7 +267,7 @@ export function StockHeatmap() {
                     </span>
                   )}
                   {showPrice && snap && (
-                    <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-80">
+                    <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
                       {formatPrice(snap.price)}
                     </span>
                   )}
@@ -276,14 +285,14 @@ export function StockHeatmap() {
         {/* hover tooltip */}
         {tooltip && hoverSnap && (
           <div
-            className="pointer-events-none fixed z-50 bg-bg-secondary border border-border rounded shadow-xl px-3 py-2 font-mono text-xs"
-            style={{ left: tooltip.x + 14, top: tooltip.y - 10 }}
+            className="pointer-events-none fixed z-50 bg-bg-secondary border border-border rounded shadow-2xl px-3 py-2 font-mono text-xs"
+            style={{ left: tooltip.cx + 14, top: tooltip.cy - 10 }}
           >
-            <div className="font-bold text-text-primary text-sm">{tooltip.id}</div>
-            <div className="text-text-muted mt-0.5">{formatPrice(hoverSnap.price)}</div>
-            <div className={`mt-0.5 font-semibold ${hoverSnap.changePercent >= 0 ? 'text-gain' : 'text-loss'}`}>
+            <p className="font-bold text-text-primary text-sm mb-0.5">{tooltip.id}</p>
+            <p className="text-text-muted">{formatPrice(hoverSnap.price)}</p>
+            <p className={`font-semibold ${hoverSnap.changePercent >= 0 ? 'text-gain' : 'text-loss'}`}>
               {hoverSnap.changePercent >= 0 ? '+' : ''}{hoverSnap.changePercent.toFixed(2)}%
-            </div>
+            </p>
           </div>
         )}
       </div>
