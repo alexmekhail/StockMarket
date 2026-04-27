@@ -14,7 +14,7 @@ export function TabNav() {
 
   return (
     <nav className="border-b border-border bg-bg-secondary">
-      <div className="max-w-screen-xl mx-auto px-4 flex">
+      <div className="max-w-screen-xl mx-auto px-4 flex justify-center">
         {TABS.map((tab) => {
           const active = pathname === tab.href;
           return (

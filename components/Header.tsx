@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { SearchBar } from './SearchBar';
 import { AuthModal } from './AuthModal';
 import { useAuth } from './AuthProvider';
 
@@ -21,8 +20,6 @@ export function Header() {
         </Link>
 
         <div className="flex items-center gap-3 ml-auto">
-          <SearchBar />
-
           {!loading && (
             <>
               {user ? (
