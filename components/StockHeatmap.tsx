@@ -95,35 +95,16 @@ const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows thr
 type Rect = { x: number; y: number; w: number; h: number };
 
 /**
- * Lay out stock tiles as squares with no sector overflow and no black gaps.
- *
- * Strategy:
- *  1. Run squarify(√mc) on the sector rectangle — provably fills every pixel,
- *     every stock always gets a cell, aspect ratios stay close to 1:1.
- *  2. Inscribe the largest possible square inside each squarify rectangle:
- *       side = min(tile.w, tile.h) − 2 px padding
- *     min(w,h) is always ≤ both dimensions, so the square can never overflow
- *     its cell — this is what caused the previous overlap bug.
- *  3. Centre the square within its cell; the thin dark halo acts as a gutter.
+ * Fill the sector rectangle completely using squarify(√mc).
+ * Tiles are whatever shape squarify assigns — aspect ratios stay close to 1:1
+ * and every pixel is used (no black gaps, no overflow, every stock visible).
  */
-function layoutSquares(stocks: StockEntry[], rect: Rect): Tile[] {
+function layoutTiles(stocks: StockEntry[], rect: Rect): Tile[] {
   if (stocks.length === 0 || rect.w < 4 || rect.h < 4) return [];
-
-  const sqTiles = squarify(
+  return squarify(
     stocks.map(s => ({ id: s.id, value: Math.sqrt(s.mc) })),
     rect,
   );
-
-  return sqTiles.map(tile => {
-    const side = Math.max(4, Math.min(tile.w, tile.h) - 2);
-    return {
-      id: tile.id,
-      x:  Math.round(tile.x + (tile.w - side) / 2),
-      y:  Math.round(tile.y + (tile.h - side) / 2),
-      w:  Math.round(side),
-      h:  Math.round(side),
-    };
-  });
 }
 
 /* ─── nested layout ───────────────────────────────────────────────────────── */
@@ -133,7 +114,7 @@ interface SectorWithWeight extends SectorDef { weight: number }
  * Recursive binary partition — guarantees a 2-D mosaic for the sector layer.
  * Splits the current rectangle along its longer axis, proportional to the
  * cumulative weight of each group, then recurses until each sector occupies
- * its own sub-rectangle. Squarify is still used for stocks *within* each sector.
+ * its own sub-rectangle. layoutTiles() fills stock tiles within each sector.
  */
 function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[] {
   if (sectors.length === 0) return [];
@@ -149,7 +130,7 @@ function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[
       w: rect.w - SECTOR_GAP * 2,
       h: rect.h - SECTOR_GAP * 2,
     };
-    const tiles = layoutSquares(s.stocks, inner);
+    const tiles = layoutTiles(s.stocks, inner);
     return [{ name: s.name, short: s.short, ...rect, tiles }];
   }
 
