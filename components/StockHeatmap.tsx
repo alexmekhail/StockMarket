@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
+import { squarify } from '@/lib/treemap';
 import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
@@ -94,95 +95,35 @@ const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows thr
 type Rect = { x: number; y: number; w: number; h: number };
 
 /**
- * Pack stocks as true squares (w = h ∝ √mc) using a greedy row-first layout.
+ * Lay out stock tiles as squares with no sector overflow and no black gaps.
  *
- * A binary search finds the largest global scale where the total packed height
- * fits within rect.h — no stretching is applied during the search so the
- * height function is strictly monotonic and convergence is guaranteed.
- * After placing all rows a uniform vertical scale fills any bottom gap while
- * keeping every tile square (the same vScale is applied to both dimensions).
+ * Strategy:
+ *  1. Run squarify(√mc) on the sector rectangle — provably fills every pixel,
+ *     every stock always gets a cell, aspect ratios stay close to 1:1.
+ *  2. Inscribe the largest possible square inside each squarify rectangle:
+ *       side = min(tile.w, tile.h) − 2 px padding
+ *     min(w,h) is always ≤ both dimensions, so the square can never overflow
+ *     its cell — this is what caused the previous overlap bug.
+ *  3. Centre the square within its cell; the thin dark halo acts as a gutter.
  */
 function layoutSquares(stocks: StockEntry[], rect: Rect): Tile[] {
   if (stocks.length === 0 || rect.w < 4 || rect.h < 4) return [];
 
-  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
-  const raw    = sorted.map(t => Math.sqrt(t.mc)); // side ∝ √mc
+  const sqTiles = squarify(
+    stocks.map(s => ({ id: s.id, value: Math.sqrt(s.mc) })),
+    rect,
+  );
 
-  /* ── height of all rows at a given scale (no row-stretch) ── */
-  function calcH(scale: number): number {
-    let h = 0, i = 0;
-    while (i < raw.length) {
-      const start = i;
-      let rowW = 0, rowMax = 0;
-      while (i < raw.length && rowW + raw[i] * scale <= rect.w) {
-        rowW  += raw[i] * scale;
-        rowMax = Math.max(rowMax, raw[i] * scale);
-        i++;
-      }
-      if (i === start) { rowMax = raw[i] * scale; i++; } // single oversized item
-      h += rowMax;
-    }
-    return h;
-  }
-
-  /* ── binary search: largest scale where all rows fit ── */
-  let lo = 1e-4;
-  let hi = rect.w / raw[0]; // largest tile fills the full row width
-  while (calcH(lo) > rect.h) lo /= 2; // ensure lo is valid
-  while (calcH(hi) <= rect.h) hi *= 2; // ensure hi overflows
-  for (let iter = 0; iter < 40; iter++) {
-    const mid = (lo + hi) / 2;
-    if (calcH(mid) <= rect.h) lo = mid; // valid → try bigger
-    else                       hi = mid; // overflows → try smaller
-  }
-  const scale = lo;
-
-  /* ── place tiles ── */
-  const rows: Array<{ items: { id: string; s: number }[]; rowMax: number }> = [];
-  let i = 0;
-  while (i < sorted.length) {
-    let rowW = 0, rowMax = 0;
-    const items: { id: string; s: number }[] = [];
-    while (i < sorted.length && rowW + raw[i] * scale <= rect.w) {
-      const s = raw[i] * scale;
-      items.push({ id: sorted[i].id, s });
-      rowW  += s;
-      rowMax = Math.max(rowMax, s);
-      i++;
-    }
-    if (items.length === 0 && i < sorted.length) {
-      const s = Math.min(raw[i] * scale, rect.w);
-      items.push({ id: sorted[i].id, s });
-      rowMax = s;
-      i++;
-    }
-    rows.push({ items, rowMax });
-  }
-
-  // Uniform vertical scale so rows fill rect.h exactly — tiles stay square
-  // because vScale is applied to both dimensions equally.
-  const totalH = rows.reduce((sum, r) => sum + r.rowMax, 0);
-  const vScale = rect.h / Math.max(totalH, 1);
-
-  const tiles: Tile[] = [];
-  let y = rect.y;
-  for (const row of rows) {
-    const rowH = row.rowMax * vScale;
-    let x = rect.x;
-    for (const item of row.items) {
-      const s = item.s * vScale;          // scale side by same vScale → square
-      tiles.push({
-        id: item.id,
-        x:  Math.round(x),
-        y:  Math.round(y + (rowH - s) / 2), // centre vertically in row
-        w:  Math.round(s),
-        h:  Math.round(s),
-      });
-      x += item.s * vScale;
-    }
-    y += rowH;
-  }
-  return tiles;
+  return sqTiles.map(tile => {
+    const side = Math.max(4, Math.min(tile.w, tile.h) - 2);
+    return {
+      id: tile.id,
+      x:  Math.round(tile.x + (tile.w - side) / 2),
+      y:  Math.round(tile.y + (tile.h - side) / 2),
+      w:  Math.round(side),
+      h:  Math.round(side),
+    };
+  });
 }
 
 /* ─── nested layout ───────────────────────────────────────────────────────── */
