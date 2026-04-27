@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import { squarify } from '@/lib/treemap';
+// squarify import removed — sector layout uses recursive binary partition,
+// stock tiles use the custom square-packing layoutSquares function below.
 import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
@@ -91,9 +92,97 @@ const sqrtMC = (mc: number) => Math.sqrt(mc);
 const CANVAS_H   = 600;
 const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
 
+/* ─── square tile packing ─────────────────────────────────────────────────── */
+type Rect = { x: number; y: number; w: number; h: number };
+
+/**
+ * Pack stocks as true squares (w = h) sized proportional to √mc.
+ * Uses a greedy row-first layout: each row is uniformly scaled so tiles fill
+ * the full row width (no right-edge gaps).  Row height = the largest tile in
+ * that row after scaling.  A global scale is iterated so total height ≈ rect.h.
+ */
+function layoutSquares(stocks: StockEntry[], rect: Rect): Tile[] {
+  if (stocks.length === 0 || rect.w < 4 || rect.h < 4) return [];
+
+  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
+  const raw    = sorted.map(t => Math.sqrt(t.mc));   // raw side lengths
+
+  // Initial scale: √(area / Σmc)
+  const totalMC = sorted.reduce((s, t) => s + t.mc, 0);
+  let scale = Math.sqrt((rect.w * rect.h) / totalMC);
+
+  // Converge scale so packed height ≈ rect.h
+  for (let iter = 0; iter < 14; iter++) {
+    const h = packedHeight(raw, scale, rect.w);
+    if (Math.abs(h - rect.h) < 1) break;
+    scale *= rect.h / Math.max(h, 1);
+  }
+
+  // Build tiles
+  const tiles: Tile[] = [];
+  let y = rect.y, i = 0;
+
+  while (i < sorted.length && y <= rect.y + rect.h + 1) {
+    // Collect a row
+    let rowRawW = 0, rowRawMax = 0;
+    const row: { id: string; raw: number }[] = [];
+
+    while (i < sorted.length && rowRawW + raw[i] * scale <= rect.w + 0.5) {
+      rowRawW  += raw[i] * scale;
+      rowRawMax = Math.max(rowRawMax, raw[i] * scale);
+      row.push({ id: sorted[i].id, raw: raw[i] });
+      i++;
+    }
+    // Always include at least one item
+    if (row.length === 0 && i < sorted.length) {
+      rowRawMax = raw[i] * scale;
+      rowRawW   = rowRawMax;
+      row.push({ id: sorted[i].id, raw: raw[i] });
+      i++;
+    }
+
+    // Uniform horizontal stretch → tiles stay square
+    const stretch = rect.w / Math.max(rowRawW, 0.001);
+    const rowH    = rowRawMax * stretch;
+    if (y + rowH > rect.y + rect.h + 2) break;
+
+    let x = rect.x;
+    for (const item of row) {
+      const s = item.raw * scale * stretch;
+      tiles.push({
+        id: item.id,
+        x:  Math.round(x),
+        y:  Math.round(y + (rowH - s) / 2), // vertically centre in row
+        w:  Math.round(s),
+        h:  Math.round(s),
+      });
+      x += s;
+    }
+    y += rowH;
+  }
+
+  return tiles;
+}
+
+/** Estimate total packed height given a global scale (with per-row stretch). */
+function packedHeight(raw: number[], scale: number, maxW: number): number {
+  let i = 0, totalH = 0;
+  while (i < raw.length) {
+    let rowW = 0, rowMax = 0;
+    const start = i;
+    while (i < raw.length && rowW + raw[i] * scale <= maxW + 0.5) {
+      rowW  += raw[i] * scale;
+      rowMax = Math.max(rowMax, raw[i] * scale);
+      i++;
+    }
+    if (i === start) { rowMax = raw[i] * scale; i++; } // force 1 item
+    totalH += rowMax * (maxW / Math.max(rowW, 0.001)); // stretch factor
+  }
+  return totalH;
+}
+
 /* ─── nested layout ───────────────────────────────────────────────────────── */
 interface SectorWithWeight extends SectorDef { weight: number }
-type Rect = { x: number; y: number; w: number; h: number };
 
 /**
  * Recursive binary partition — guarantees a 2-D mosaic for the sector layer.
@@ -115,10 +204,7 @@ function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[
       w: rect.w - SECTOR_GAP * 2,
       h: rect.h - SECTOR_GAP * 2,
     };
-    const tiles = squarify(
-      s.stocks.map(t => ({ id: t.id, value: sqrtMC(t.mc) })),
-      inner,
-    );
+    const tiles = layoutSquares(s.stocks, inner);
     return [{ name: s.name, short: s.short, ...rect, tiles }];
   }
 
