@@ -86,10 +86,15 @@ const SECTORS: SectorDef[] = [
 ];
 
 const ALL_TICKERS = SECTORS.flatMap((s) => s.stocks.map((t) => t.id));
-const TOTAL_MC = SECTORS.flatMap((s) => s.stocks).reduce((sum, s) => sum + s.mc, 0);
+
+// Use sqrt of market cap so tile sizes stay close to square (same normalisation
+// TradingView uses internally). Linear mc gives a 60× size range; sqrt reduces
+// it to ~8×, making most tiles logo-sized.
+const sqrtMC = (mc: number) => Math.sqrt(mc);
+const TOTAL_SQRT = SECTORS.flatMap((s) => s.stocks).reduce((sum, s) => sum + sqrtMC(s.mc), 0);
 
 /* ─── layout constants ────────────────────────────────────────────────────── */
-const CANVAS_H = 520;
+const CANVAS_H = 560;
 const LABEL_H  = 26;
 const TILE_H   = CANVAS_H - LABEL_H;
 
@@ -115,11 +120,11 @@ interface SectorLayout { name: string; short: string; x: number; w: number; tile
 function buildLayout(totalW: number): SectorLayout[] {
   let xCursor = 0;
   return SECTORS.map((sector) => {
-    const sectorMC = sector.stocks.reduce((s, t) => s + t.mc, 0);
-    const sectorW  = Math.round((sectorMC / TOTAL_MC) * totalW);
+    const sectorSqrt = sector.stocks.reduce((s, t) => s + sqrtMC(t.mc), 0);
+    const sectorW    = Math.round((sectorSqrt / TOTAL_SQRT) * totalW);
 
     const tiles = squarify(
-      sector.stocks.map((s) => ({ id: s.id, value: s.mc })),
+      sector.stocks.map((s) => ({ id: s.id, value: sqrtMC(s.mc) })),
       { x: 0, y: 0, w: sectorW, h: TILE_H },
     ).map((t) => ({ ...t, x: t.x + xCursor, y: t.y + LABEL_H }));
 
