@@ -11,15 +11,16 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-40 bg-bg-primary border-b border-border px-4 h-12 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-bg-primary border-b border-border px-4 h-12 flex items-center gap-4">
+        <div className="flex-1" />
         <Link
           href="/"
           className="font-mono text-xs font-bold tracking-[0.2em] text-text-primary hover:text-accent transition-colors whitespace-nowrap"
         >
-          ▸ MARKET TERMINAL
+          MARKET TERMINAL
         </Link>
 
-        <div className="flex items-center gap-3 ml-auto">
+        <div className="flex-1 flex items-center justify-end gap-3">
           {!loading && (
             <>
               {user ? (

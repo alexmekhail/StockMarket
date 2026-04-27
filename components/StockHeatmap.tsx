@@ -6,6 +6,27 @@ import { squarify } from '@/lib/treemap';
 import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
+// Distinct accent color per sector (label bar background)
+const SECTOR_COLORS: Record<string, string> = {
+  'Electronic Technology': '#0f2a4a',   // deep blue
+  'Technology Services':   '#1a1a4a',   // indigo
+  'Finance':               '#2a1f00',   // dark gold
+  'Health Technology':     '#0f2e22',   // dark teal
+  'Retail Trade':          '#2a1800',   // dark orange
+  'Consumer Durables':     '#2a0f1a',   // dark rose
+  'Energy Minerals':       '#1e1500',   // dark amber
+};
+
+const SECTOR_BORDER: Record<string, string> = {
+  'Electronic Technology': '#1e6bb8',
+  'Technology Services':   '#6b5fb5',
+  'Finance':               '#b58c00',
+  'Health Technology':     '#1a9e6e',
+  'Retail Trade':          '#c46d00',
+  'Consumer Durables':     '#b5305a',
+  'Energy Minerals':       '#c47f00',
+};
+
 const SECTORS = [
   {
     name: 'Electronic Technology',
@@ -110,7 +131,7 @@ const SECTORS = [
 const ALL_TICKERS = SECTORS.flatMap((s) => s.stocks.map((t) => t.id));
 const TOTAL_MC = SECTORS.flatMap((s) => s.stocks).reduce((sum, s) => sum + s.marketCap, 0);
 
-const LABEL_H = 22; // px reserved at top of each sector for its name
+const LABEL_H = 28; // px reserved at top of each sector for its name
 const HEATMAP_H = 480; // total canvas height
 const TILE_H = HEATMAP_H - LABEL_H;
 
@@ -213,13 +234,19 @@ export function StockHeatmap() {
                 top: 0,
                 width: sector.w,
                 height: LABEL_H,
+                backgroundColor: SECTOR_COLORS[sector.name] ?? '#1a1a1a',
                 borderRight: '2px solid #000',
+                borderBottom: `2px solid ${SECTOR_BORDER[sector.name] ?? '#444'}`,
+                borderLeft: `3px solid ${SECTOR_BORDER[sector.name] ?? '#444'}`,
                 boxSizing: 'border-box',
               }}
-              className="flex items-center justify-center bg-bg-tertiary overflow-hidden"
+              className="flex items-center justify-center overflow-hidden"
             >
-              <span className="font-mono text-[9px] font-semibold text-text-muted uppercase tracking-widest truncate px-1">
-                {sector.w > 80 ? sector.name : sector.short}
+              <span
+                style={{ color: SECTOR_BORDER[sector.name] ?? '#aaa' }}
+                className="font-mono text-[9px] font-bold uppercase tracking-widest truncate px-1"
+              >
+                {sector.w > 90 ? sector.name : sector.short}
               </span>
             </div>
 

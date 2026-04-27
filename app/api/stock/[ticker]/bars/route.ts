@@ -8,10 +8,9 @@ function getRangeParams(range: TimeRange): { timeframe: string; start: string; e
   const end = now.toISOString();
 
   if (range === '1D') {
-    // Go back ~26 hours to capture the full latest trading session regardless of timezone.
-    // The IEX feed returns minute bars only during market hours so we'll always get
-    // a clean single day of data even with a larger window.
-    const start = new Date(now.getTime() - 26 * 60 * 60 * 1000);
+    // Go back 5 days so we always capture the most recent trading session,
+    // even on weekends or after a holiday. We then trim to just the last day below.
+    const start = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
     return { timeframe: '1Min', start: start.toISOString(), end };
   }
 
@@ -35,9 +34,27 @@ export async function GET(
   try {
     const { timeframe, start, end } = getRangeParams(range);
     const bars = await fetchBars(ticker, timeframe, start, end);
-    const chartData = bars
+    let chartData = bars
       .map(alpacaBarToChartPoint)
       .sort((a, b) => a.time - b.time);
+
+    // For 1D: trim to only the most recent trading session.
+    // Alpaca timestamps are UTC; ET market hours are UTC-4 (EDT) / UTC-5 (EST).
+    // We subtract 5 hours as a conservative offset so the date always falls on the
+    // correct US trading day regardless of DST.
+    if (range === '1D' && chartData.length > 0) {
+      const ET_OFFSET_S = 5 * 60 * 60; // 5 hours in seconds
+      const lastTime = chartData[chartData.length - 1].time;
+      const lastDateET = new Date((lastTime - ET_OFFSET_S) * 1000)
+        .toISOString()
+        .substring(0, 10);
+      chartData = chartData.filter((d) => {
+        const dateET = new Date((d.time - ET_OFFSET_S) * 1000)
+          .toISOString()
+          .substring(0, 10);
+        return dateET === lastDateET;
+      });
+    }
 
     return NextResponse.json({ chartData, bars }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
