@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-// squarify import removed — sector layout uses recursive binary partition,
-// stock tiles use the custom square-packing layoutSquares function below.
+import { squarify } from '@/lib/treemap';
 import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
@@ -96,89 +95,32 @@ const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows thr
 type Rect = { x: number; y: number; w: number; h: number };
 
 /**
- * Pack stocks as true squares (w = h) sized proportional to √mc.
- * Uses a greedy row-first layout: each row is uniformly scaled so tiles fill
- * the full row width (no right-edge gaps).  Row height = the largest tile in
- * that row after scaling.  A global scale is iterated so total height ≈ rect.h.
+ * Run squarify to get a filled layout (no gaps), then convert each rectangle
+ * to a centred square with the same area.  Every company is always visible;
+ * the tiny dark halo around each square acts as a natural gutter.
+ * Tile area ∝ mc  →  tile side ∝ √mc  (correct size-by-market-cap scaling).
  */
 function layoutSquares(stocks: StockEntry[], rect: Rect): Tile[] {
   if (stocks.length === 0 || rect.w < 4 || rect.h < 4) return [];
 
-  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
-  const raw    = sorted.map(t => Math.sqrt(t.mc));   // raw side lengths
+  const sqTiles = squarify(
+    stocks.map(s => ({ id: s.id, value: s.mc })),
+    rect,
+  );
 
-  // Initial scale: √(area / Σmc)
-  const totalMC = sorted.reduce((s, t) => s + t.mc, 0);
-  let scale = Math.sqrt((rect.w * rect.h) / totalMC);
-
-  // Converge scale so packed height ≈ rect.h
-  for (let iter = 0; iter < 14; iter++) {
-    const h = packedHeight(raw, scale, rect.w);
-    if (Math.abs(h - rect.h) < 1) break;
-    scale *= rect.h / Math.max(h, 1);
-  }
-
-  // Build tiles
-  const tiles: Tile[] = [];
-  let y = rect.y, i = 0;
-
-  while (i < sorted.length && y <= rect.y + rect.h + 1) {
-    // Collect a row
-    let rowRawW = 0, rowRawMax = 0;
-    const row: { id: string; raw: number }[] = [];
-
-    while (i < sorted.length && rowRawW + raw[i] * scale <= rect.w + 0.5) {
-      rowRawW  += raw[i] * scale;
-      rowRawMax = Math.max(rowRawMax, raw[i] * scale);
-      row.push({ id: sorted[i].id, raw: raw[i] });
-      i++;
-    }
-    // Always include at least one item
-    if (row.length === 0 && i < sorted.length) {
-      rowRawMax = raw[i] * scale;
-      rowRawW   = rowRawMax;
-      row.push({ id: sorted[i].id, raw: raw[i] });
-      i++;
-    }
-
-    // Uniform horizontal stretch → tiles stay square
-    const stretch = rect.w / Math.max(rowRawW, 0.001);
-    const rowH    = rowRawMax * stretch;
-    if (y + rowH > rect.y + rect.h + 2) break;
-
-    let x = rect.x;
-    for (const item of row) {
-      const s = item.raw * scale * stretch;
-      tiles.push({
-        id: item.id,
-        x:  Math.round(x),
-        y:  Math.round(y + (rowH - s) / 2), // vertically centre in row
-        w:  Math.round(s),
-        h:  Math.round(s),
-      });
-      x += s;
-    }
-    y += rowH;
-  }
-
-  return tiles;
-}
-
-/** Estimate total packed height given a global scale (with per-row stretch). */
-function packedHeight(raw: number[], scale: number, maxW: number): number {
-  let i = 0, totalH = 0;
-  while (i < raw.length) {
-    let rowW = 0, rowMax = 0;
-    const start = i;
-    while (i < raw.length && rowW + raw[i] * scale <= maxW + 0.5) {
-      rowW  += raw[i] * scale;
-      rowMax = Math.max(rowMax, raw[i] * scale);
-      i++;
-    }
-    if (i === start) { rowMax = raw[i] * scale; i++; } // force 1 item
-    totalH += rowMax * (maxW / Math.max(rowW, 0.001)); // stretch factor
-  }
-  return totalH;
+  return sqTiles.map(tile => {
+    // Square with the same area as the squarify rectangle
+    const side = Math.max(4, Math.sqrt(tile.w * tile.h));
+    const cx   = tile.x + tile.w / 2;
+    const cy   = tile.y + tile.h / 2;
+    return {
+      id: tile.id,
+      x:  Math.round(cx - side / 2),
+      y:  Math.round(cy - side / 2),
+      w:  Math.round(side),
+      h:  Math.round(side),
+    };
+  });
 }
 
 /* ─── nested layout ───────────────────────────────────────────────────────── */
