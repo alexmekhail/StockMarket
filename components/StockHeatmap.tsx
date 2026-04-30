@@ -6,13 +6,11 @@ import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
 /* ─── types ───────────────────────────────────────────────────────────────── */
-interface StockEntry  { id: string; mc: number }
-interface SectorDef   { name: string; short: string; stocks: StockEntry[] }
-interface Tile        { id: string; x: number; y: number; w: number; h: number }
+interface StockEntry { id: string; mc: number }
+interface SectorDef  { name: string; short: string; stocks: StockEntry[] }
 interface SectorBlock {
-  name: string; short: string;
+  name: string; short: string; stocks: StockEntry[];
   x: number; y: number; w: number; h: number;
-  tiles: Tile[];
 }
 
 /* ─── sectors (GICS-style) ────────────────────────────────────────────────── */
@@ -84,86 +82,26 @@ const SECTORS: SectorDef[] = [
 ];
 
 const ALL_TICKERS = SECTORS.flatMap(s => s.stocks.map(t => t.id));
-const sqrtMC = (mc: number) => Math.sqrt(mc);
 
 /* ─── canvas ──────────────────────────────────────────────────────────────── */
-const CANVAS_H   = 600;
-const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
+const CANVAS_H   = 620;
+const SECTOR_GAP = 3;
 
-/* ─── square tile layout ─────────────────────────────────────────────────── */
+/* ─── sector partition (unchanged — sets sector rects, not tile rects) ─────── */
 type Rect = { x: number; y: number; w: number; h: number };
 
-/**
- * Binary-search for the largest square side `s` such that all n tiles fit
- * inside `rect` (cols = floor(w/s), rows = ceil(n/cols), rows*s ≤ h).
- * The resulting square grid is centred inside the rect so any leftover space
- * is evenly split at the edges — it will show as the sector's background colour,
- * not as a black gap. Stocks are sorted largest market-cap first.
- */
-function layoutSquares(stocks: StockEntry[], rect: Rect): Tile[] {
-  const n = stocks.length;
-  if (n === 0 || rect.w < 4 || rect.h < 4) return [];
-
-  const { x, y, w, h } = rect;
-  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
-
-  // Largest s where all tiles still fit
-  let lo = 1, hi = Math.min(w, h);
-  for (let i = 0; i < 64; i++) {
-    const mid = (lo + hi) / 2;
-    const cols = Math.max(1, Math.floor(w / mid));
-    const rows = Math.ceil(n / cols);
-    if (rows * mid <= h) lo = mid; else hi = mid;
-  }
-
-  const s    = lo;
-  const cols = Math.max(1, Math.floor(w / s));
-  const rows = Math.ceil(n / cols);
-  // Centre the square grid so leftover space is split symmetrically
-  const ox   = x + (w - cols * s) / 2;
-  const oy   = y + (h - rows * s) / 2;
-
-  return sorted.map((stock, i) => ({
-    id: stock.id,
-    x:  ox + (i % cols) * s,
-    y:  oy + Math.floor(i / cols) * s,
-    w:  s,
-    h:  s,
-  }));
-}
-
-/* ─── nested layout ───────────────────────────────────────────────────────── */
 interface SectorWithWeight extends SectorDef { weight: number }
 
-/**
- * Recursive binary partition — guarantees a 2-D mosaic for the sector layer.
- * Splits the current rectangle along its longer axis, proportional to the
- * cumulative weight of each group, then recurses until each sector occupies
- * its own sub-rectangle. layoutTiles() fills stock tiles within each sector.
- */
 function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[] {
   if (sectors.length === 0) return [];
 
   if (sectors.length === 1) {
     const s = sectors[0];
-    if (rect.w < 2 || rect.h < 2) {
-      return [{ name: s.name, short: s.short, ...rect, tiles: [] }];
-    }
-    const inner: Rect = {
-      x: rect.x + SECTOR_GAP,
-      y: rect.y + SECTOR_GAP,
-      w: rect.w - SECTOR_GAP * 2,
-      h: rect.h - SECTOR_GAP * 2,
-    };
-    const tiles = layoutSquares(s.stocks, inner);
-    return [{ name: s.name, short: s.short, ...rect, tiles }];
+    return [{ name: s.name, short: s.short, stocks: s.stocks, ...rect }];
   }
 
-  // Find the split index that balances the two groups' weights most evenly
   const total = sectors.reduce((sum, s) => sum + s.weight, 0);
-  let bestIdx = 1;
-  let bestDiff = Infinity;
-  let acc = 0;
+  let bestIdx = 1, bestDiff = Infinity, acc = 0;
   for (let i = 0; i < sectors.length - 1; i++) {
     acc += sectors[i].weight;
     const diff = Math.abs(acc * 2 - total);
@@ -172,28 +110,29 @@ function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[
 
   const g1 = sectors.slice(0, bestIdx);
   const g2 = sectors.slice(bestIdx);
-  const w1 = g1.reduce((sum, s) => sum + s.weight, 0);
-  const ratio = w1 / total;
+  const ratio = g1.reduce((s, x) => s + x.weight, 0) / total;
 
-  // Split along the longer dimension
   if (rect.w >= rect.h) {
     const split = Math.round(ratio * rect.w);
-    const r1: Rect = { x: rect.x,         y: rect.y, w: split,           h: rect.h };
-    const r2: Rect = { x: rect.x + split,  y: rect.y, w: rect.w - split,  h: rect.h };
-    return [...partitionSectors(g1, r1), ...partitionSectors(g2, r2)];
-  } else {
-    const split = Math.round(ratio * rect.h);
-    const r1: Rect = { x: rect.x, y: rect.y,         w: rect.w, h: split          };
-    const r2: Rect = { x: rect.x, y: rect.y + split,  w: rect.w, h: rect.h - split };
-    return [...partitionSectors(g1, r1), ...partitionSectors(g2, r2)];
+    return [
+      ...partitionSectors(g1, { x: rect.x,         y: rect.y, w: split,          h: rect.h }),
+      ...partitionSectors(g2, { x: rect.x + split,  y: rect.y, w: rect.w - split, h: rect.h }),
+    ];
   }
+  const split = Math.round(ratio * rect.h);
+  return [
+    ...partitionSectors(g1, { x: rect.x, y: rect.y,         w: rect.w, h: split          }),
+    ...partitionSectors(g2, { x: rect.x, y: rect.y + split, w: rect.w, h: rect.h - split }),
+  ];
 }
 
 function buildLayout(W: number, H: number): SectorBlock[] {
   const sorted: SectorWithWeight[] = SECTORS
-    .map(s => ({ ...s, weight: s.stocks.reduce((sum, t) => sum + sqrtMC(t.mc), 0) }))
+    .map(s => ({
+      ...s,
+      weight: s.stocks.reduce((sum, t) => sum + Math.sqrt(t.mc), 0),
+    }))
     .sort((a, b) => b.weight - a.weight);
-
   return partitionSectors(sorted, { x: 0, y: 0, w: W, h: H });
 }
 
@@ -252,8 +191,8 @@ export function StockHeatmap() {
       .finally(() => setLoading(false));
   }, []);
 
-  const layout     = canvasW > 0 ? buildLayout(canvasW, CANVAS_H) : [];
-  const hoverSnap  = tooltip ? snaps[tooltip.id] : null;
+  const layout    = canvasW > 0 ? buildLayout(canvasW, CANVAS_H) : [];
+  const hoverSnap = tooltip ? snaps[tooltip.id] : null;
 
   return (
     <div className="border border-border rounded overflow-hidden bg-[#0a0a0a]">
@@ -274,97 +213,112 @@ export function StockHeatmap() {
         style={{ height: CANVAS_H }}
         onMouseLeave={() => setTooltip(null)}
       >
-        {layout.map(sector => sector.w > 0 && (
-          <div key={sector.name}>
+        {layout.map(sector => {
+          if (sector.w < 4 || sector.h < 4) return null;
 
-            {/* sector inner background — fills edge space between square tiles so it reads as "sector" not black void */}
+          const iw = sector.w - SECTOR_GAP * 2;
+          const ih = sector.h - SECTOR_GAP * 2;
+          const n  = sector.stocks.length;
+
+          // Number of columns: choose so tile side (iw/cols) ≈ tile height (ih/rows).
+          // Equivalently, cols ≈ sqrt(n * iw / ih). CSS aspect-ratio:1 enforces
+          // the square — these cols just pick how many fit across the sector width.
+          const cols = Math.max(1, Math.ceil(Math.sqrt(n * iw / ih)));
+          // Tile side in px (width-driven; CSS aspect-ratio enforces equal height)
+          const side = iw / cols;
+
+          const sorted = [...sector.stocks].sort((a, b) => b.mc - a.mc);
+
+          return (
             <div
+              key={sector.name}
               style={{
                 position: 'absolute',
-                left:   sector.x + SECTOR_GAP,
-                top:    sector.y + SECTOR_GAP,
-                width:  sector.w - SECTOR_GAP * 2,
-                height: sector.h - SECTOR_GAP * 2,
+                left:     sector.x + SECTOR_GAP,
+                top:      sector.y + SECTOR_GAP,
+                width:    iw,
+                height:   ih,
                 background: '#0d0d18',
-                zIndex: 0,
+                overflow: 'hidden',
               }}
-            />
-
-            {/* sector name label — floating gradient over the top-left of the block */}
-            <div
-              style={{
-                position: 'absolute',
-                left: sector.x + SECTOR_GAP,
-                top:  sector.y + SECTOR_GAP,
-                width: sector.w - SECTOR_GAP * 2,
-                height: 20,
-                background: 'linear-gradient(to bottom,rgba(0,0,0,.65) 0%,transparent 100%)',
-                zIndex: 6,
-                pointerEvents: 'none',
-              }}
-              className="flex items-start pt-1 pl-1.5 overflow-hidden"
             >
-              <span className="font-mono text-[9px] font-semibold text-white/55 uppercase tracking-widest leading-none truncate">
-                {sector.w > 100 ? sector.name : sector.short}
-              </span>
-            </div>
+              {/* sector label */}
+              <div
+                style={{
+                  position: 'absolute', top: 0, left: 0, right: 0, height: 20,
+                  background: 'linear-gradient(to bottom,rgba(0,0,0,.7) 0%,transparent 100%)',
+                  zIndex: 6, pointerEvents: 'none',
+                  display: 'flex', alignItems: 'flex-start', paddingTop: 3, paddingLeft: 6,
+                }}
+              >
+                <span className="font-mono text-[9px] font-semibold text-white/55 uppercase tracking-widest leading-none truncate">
+                  {iw > 100 ? sector.name : sector.short}
+                </span>
+              </div>
 
-            {/* stock tiles */}
-            {sector.tiles.map(tile => {
-              const snap = snaps[tile.id];
-              const pct  = snap?.changePercent ?? 0;
-              const bg   = loading ? '#181820' : tileBg(pct);
-              const fg   = loading ? '#444'    : tileFg(pct);
+              {/* square tile grid — CSS grid + aspect-ratio:1 guarantees exact squares */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${cols}, 1fr)`,
+                  gap: 1,
+                  width: '100%',
+                }}
+              >
+                {sorted.map(stock => {
+                  const snap = snaps[stock.id];
+                  const pct  = snap?.changePercent ?? 0;
+                  const bg   = loading ? '#181820' : tileBg(pct);
+                  const fg   = loading ? '#444'    : tileFg(pct);
 
-              const showLogo  = tile.w >= 58 && tile.h >= 50;
-              const logoSz    = Math.min(Math.floor(Math.min(tile.w, tile.h) * 0.34), 38);
-              const showPrice = tile.w >= 78 && tile.h >= 72;
-              const showPct   = tile.w >= 32 && tile.h >= 24;
-              const showTick  = tile.w >= 20 && tile.h >= 14;
-              const tickSz    = tile.w < 42 ? 8 : tile.w < 62 ? 9 : tile.w < 90 ? 10 : 11;
+                  const showLogo  = side >= 58;
+                  const logoSz    = Math.min(Math.floor(side * 0.34), 38);
+                  const showPrice = side >= 78;
+                  const showPct   = side >= 32;
+                  const showTick  = side >= 20;
+                  const tickSz    = side < 42 ? 8 : side < 62 ? 9 : side < 90 ? 10 : 11;
 
-              return (
-                <Link
-                  key={tile.id}
-                  href={`/stock/${tile.id}`}
-                  onMouseEnter={e => setTooltip({ id: tile.id, cx: e.clientX, cy: e.clientY })}
-                  onMouseMove={e  => setTooltip({ id: tile.id, cx: e.clientX, cy: e.clientY })}
-                  style={{
-                    position:        'absolute',
-                    left:            tile.x,
-                    top:             tile.y,
-                    width:           tile.w,
-                    height:          tile.h,
-                    backgroundColor: bg,
-                    border:          '1px solid rgba(0,0,0,.55)',
-                    boxSizing:       'border-box',
-                  }}
-                  className="flex flex-col items-center justify-center overflow-hidden hover:brightness-110 transition-[filter] z-[1]"
-                >
-                  {showLogo  && <Logo ticker={tile.id} size={logoSz} />}
-                  {showTick  && (
-                    <span
-                      style={{ color: fg, fontSize: tickSz, lineHeight: 1.25 }}
-                      className={`font-mono font-bold tracking-wide${showLogo ? ' mt-1' : ''}`}
+                  return (
+                    <Link
+                      key={stock.id}
+                      href={`/stock/${stock.id}`}
+                      onMouseEnter={e => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
+                      onMouseMove={e  => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
+                      style={{
+                        aspectRatio:     '1 / 1',
+                        backgroundColor: bg,
+                        border:          '1px solid rgba(0,0,0,.45)',
+                        boxSizing:       'border-box',
+                        overflow:        'hidden',
+                      }}
+                      className="flex flex-col items-center justify-center hover:brightness-110 transition-[filter] z-[1]"
                     >
-                      {tile.id}
-                    </span>
-                  )}
-                  {showPrice && snap && (
-                    <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
-                      {formatPrice(snap.price)}
-                    </span>
-                  )}
-                  {showPct && (
-                    <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono font-semibold">
-                      {loading ? '—' : snap ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'N/A'}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
+                      {showLogo  && <Logo ticker={stock.id} size={logoSz} />}
+                      {showTick  && (
+                        <span
+                          style={{ color: fg, fontSize: tickSz, lineHeight: 1.25 }}
+                          className={`font-mono font-bold tracking-wide${showLogo ? ' mt-1' : ''}`}
+                        >
+                          {stock.id}
+                        </span>
+                      )}
+                      {showPrice && snap && (
+                        <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
+                          {formatPrice(snap.price)}
+                        </span>
+                      )}
+                      {showPct && (
+                        <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono font-semibold">
+                          {loading ? '—' : snap ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'N/A'}
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
 
         {/* hover tooltip */}
         {tooltip && hoverSnap && (
