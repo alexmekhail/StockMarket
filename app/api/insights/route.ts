@@ -123,8 +123,7 @@ Intraday Range Position: ${intradayPosition}`;
     try {
       result = JSON.parse(text);
     } catch {
-      console.error('[/api/insights] JSON parse failed:', text);
-      result = FALLBACK;
+      return NextResponse.json({ ...FALLBACK, _s: 'parse_fail', _raw: text.slice(0, 500) });
     }
 
     cache.set(ticker, result);
