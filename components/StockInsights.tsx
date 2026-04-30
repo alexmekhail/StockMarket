@@ -26,7 +26,7 @@ export interface StockInsightsData {
 
 interface StockInsightsProps {
   ticker: string;
-  stockData: StockInsightsData;
+  stockData: StockInsightsData | null;
 }
 
 const SIGNAL_CONFIG: Record<Signal, { bg: string; text: string; bar: string; icon: string }> = {
@@ -79,17 +79,19 @@ export function StockInsights({ ticker, stockData }: StockInsightsProps) {
   });
 
   const fetchInsights = useCallback(async () => {
+    const data = stockDataRef.current;
+    if (!data || data.price === 0) return; // wait for real snapshot data
     setLoading(true);
     setError(false);
     try {
       const res = await fetch('/api/insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker, ...stockDataRef.current }),
+        body: JSON.stringify({ ticker, ...data }),
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
-      const data: InsightResult = await res.json();
-      setResult(data);
+      const insight: InsightResult = await res.json();
+      setResult(insight);
       setGeneratedAt(new Date().toLocaleTimeString());
     } catch {
       setError(true);
@@ -98,9 +100,12 @@ export function StockInsights({ ticker, stockData }: StockInsightsProps) {
     }
   }, [ticker]);
 
+  // Trigger fetch once real snapshot data arrives
   useEffect(() => {
-    fetchInsights();
-  }, [fetchInsights]);
+    if (stockData && stockData.price > 0) {
+      fetchInsights();
+    }
+  }, [ticker, stockData?.price, fetchInsights]);
 
   const cfg = result ? SIGNAL_CONFIG[result.signal] : null;
 

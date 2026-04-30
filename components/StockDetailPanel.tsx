@@ -179,26 +179,26 @@ export function StockDetailPanel({ ticker }: Props) {
       {/* Chart */}
       <StockChart data={chartData} isPositive={positive} loading={chartLoading} />
 
-      {/* News */}
-      <div className="border-t border-border">
-        <NewsPanel ticker={ticker} />
+      {/* News (1/3) | AI Insights (2/3) */}
+      <div className="border-t border-border grid grid-cols-3 min-h-[400px]">
+        <div className="col-span-1 border-r border-border overflow-y-auto">
+          <NewsPanel ticker={ticker} />
+        </div>
+        <div className="col-span-2 overflow-y-auto">
+          <StockInsights
+            ticker={ticker}
+            stockData={snapshot ? {
+              price: snapshot.price,
+              changePercent: snapshot.changePercent,
+              volume: snapshot.volume,
+              open: snapshot.open,
+              high: snapshot.high,
+              low: snapshot.low,
+              prevClose: snapshot.prevClose,
+            } : null}
+          />
+        </div>
       </div>
-
-      {/* AI Insights */}
-      {snapshot && (
-        <StockInsights
-          ticker={ticker}
-          stockData={{
-            price: snapshot.price,
-            changePercent: snapshot.changePercent,
-            volume: snapshot.volume,
-            open: snapshot.open,
-            high: snapshot.high,
-            low: snapshot.low,
-            prevClose: snapshot.prevClose,
-          }}
-        />
-      )}
     </div>
   );
 }
