@@ -33,10 +33,20 @@ const FALLBACK: InsightResult = {
 };
 
 // In-memory rate limit + result cache (resets on server restart)
-// Add to Vercel env vars: ANTHROPIC_API_KEY
+// Add to Vercel env vars: GEMINI_API_KEY
 const lastCalled = new Map<string, number>();
 const cache = new Map<string, InsightResult>();
 const RATE_LIMIT_MS = 60_000;
+
+const SYSTEM_PROMPT = `You are a quantitative stock analyst. Given stock metrics, produce a structured JSON analysis.
+Return ONLY valid JSON, no preamble or markdown fences. Schema:
+{
+  "signal": "Strong Buy" | "Buy" | "Hold" | "Sell" | "Strong Sell",
+  "confidence": number (0-100),
+  "sentiment": "Bullish" | "Neutral" | "Bearish",
+  "reasons": string[] (exactly 4 items, each under 80 characters, specific and data-driven),
+  "summary": string (one sentence, under 120 characters)
+}`;
 
 export async function POST(req: NextRequest) {
   let body: InsightRequest;
@@ -51,8 +61,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing ticker' }, { status: 400 });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('[/api/insights] ANTHROPIC_API_KEY not set');
+  if (!process.env.GEMINI_API_KEY) {
+    console.error('[/api/insights] GEMINI_API_KEY not set');
     return NextResponse.json(FALLBACK);
   }
 
@@ -74,30 +84,7 @@ export async function POST(req: NextRequest) {
       ? `${body.price >= body.open ? '+' : ''}${(((body.price - body.open) / body.open) * 100).toFixed(2)}% from open`
       : 'n/a';
 
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 512,
-        system: `You are a quantitative stock analyst. Given stock metrics, produce a structured JSON analysis.
-Return ONLY valid JSON, no preamble or markdown fences. Schema:
-{
-  "signal": "Strong Buy" | "Buy" | "Hold" | "Sell" | "Strong Sell",
-  "confidence": number (0-100),
-  "sentiment": "Bullish" | "Neutral" | "Bearish",
-  "reasons": string[] (exactly 4 items, each under 80 characters, specific and data-driven),
-  "summary": string (one sentence, under 120 characters)
-}`,
-        messages: [
-          {
-            role: 'user',
-            content: `Analyze this stock and return JSON only:
+  const userPrompt = `Analyze this stock and return JSON only:
 Ticker: ${ticker}
 Current Price: $${body.price}
 Change Today: ${body.changePercent > 0 ? '+' : ''}${body.changePercent.toFixed(2)}%
@@ -107,23 +94,35 @@ Day High: $${body.high}
 Day Low: $${body.low}
 Previous Close: $${body.prevClose}
 Price vs Open: ${priceVsOpen}
-Intraday Range Position: ${intradayPosition}`,
-          },
-        ],
+Intraday Range Position: ${intradayPosition}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 512 },
       }),
     });
 
     if (!res.ok) {
-      console.error('[/api/insights] Anthropic error:', res.status, await res.text());
+      console.error('[/api/insights] Gemini error:', res.status, await res.text());
       return NextResponse.json(FALLBACK);
     }
 
     const data = await res.json();
-    const text: string = data.content?.[0]?.text ?? '';
+    const text: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+
+    // Strip markdown fences if the model wraps output anyway
+    const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
 
     let result: InsightResult;
     try {
-      result = JSON.parse(text);
+      result = JSON.parse(clean);
     } catch {
       console.error('[/api/insights] JSON parse failed:', text);
       result = FALLBACK;
