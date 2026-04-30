@@ -136,6 +136,46 @@ function buildLayout(W: number, H: number): SectorBlock[] {
   return partitionSectors(sorted, { x: 0, y: 0, w: W, h: H });
 }
 
+/* ─── two-tier grid layout ───────────────────────────────────────────────── */
+/**
+ * Splits stocks into "large" (mc^0.25 >= 70 % of sector max) and "small" tiers.
+ * Returns the column count for each tier chosen so their combined CSS-grid
+ * heights sum as close as possible to `ih`. Because tiles use aspect-ratio:1,
+ * tile size = sectionWidth / cols — so largeColsL < colsS gives subtly bigger
+ * squares for the large tier without being drastic.
+ */
+function twoTierCols(
+  stocks: StockEntry[],
+  iw: number,
+  ih: number,
+): { large: StockEntry[]; small: StockEntry[]; colsL: number; colsS: number } {
+  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
+  const n = sorted.length;
+  const maxNorm = Math.pow(sorted[0].mc, 0.25);
+  const splitAt  = sorted.findIndex(s => Math.pow(s.mc, 0.25) < 0.70 * maxNorm);
+  const large    = splitAt <= 0 ? sorted : sorted.slice(0, splitAt);
+  const small    = splitAt <= 0 ? []     : sorted.slice(splitAt);
+
+  // Single-tier fallback
+  if (small.length === 0) {
+    const cols = Math.max(1, Math.ceil(Math.sqrt(n * iw / ih)));
+    return { large: sorted, small: [], colsL: cols, colsS: cols };
+  }
+
+  // Search (colsL, colsS) to fill ih; constrain size ratio to ≤ 2×
+  let bestCL = 1, bestCS = 2, bestDiff = Infinity;
+  for (let cL = 1; cL <= large.length; cL++) {
+    for (let cS = cL + 1; cS <= n; cS++) {
+      if (iw / cS < (iw / cL) * 0.45) break; // tile ratio > ~2.2× — too drastic
+      const hL = Math.ceil(large.length / cL) * (iw / cL);
+      const hS = Math.ceil(small.length / cS) * (iw / cS);
+      const diff = Math.abs(hL + hS - ih);
+      if (diff < bestDiff) { bestDiff = diff; bestCL = cL; bestCS = cS; }
+    }
+  }
+  return { large, small, colsL: bestCL, colsS: bestCS };
+}
+
 /* ─── colour scale ────────────────────────────────────────────────────────── */
 function tileBg(pct: number): string {
   const v = Math.max(-5, Math.min(5, pct));
@@ -218,16 +258,58 @@ export function StockHeatmap() {
 
           const iw = sector.w - SECTOR_GAP * 2;
           const ih = sector.h - SECTOR_GAP * 2;
-          const n  = sector.stocks.length;
+          const { large, small, colsL, colsS } = twoTierCols(sector.stocks, iw, ih);
+          const sideL = iw / colsL;
+          const sideS = iw / colsS;
 
-          // Number of columns: choose so tile side (iw/cols) ≈ tile height (ih/rows).
-          // Equivalently, cols ≈ sqrt(n * iw / ih). CSS aspect-ratio:1 enforces
-          // the square — these cols just pick how many fit across the sector width.
-          const cols = Math.max(1, Math.ceil(Math.sqrt(n * iw / ih)));
-          // Tile side in px (width-driven; CSS aspect-ratio enforces equal height)
-          const side = iw / cols;
-
-          const sorted = [...sector.stocks].sort((a, b) => b.mc - a.mc);
+          const renderTile = (stock: StockEntry, side: number) => {
+            const snap = snaps[stock.id];
+            const pct  = snap?.changePercent ?? 0;
+            const bg   = loading ? '#181820' : tileBg(pct);
+            const fg   = loading ? '#444'    : tileFg(pct);
+            const showLogo  = side >= 58;
+            const logoSz    = Math.min(Math.floor(side * 0.34), 38);
+            const showPrice = side >= 78;
+            const showPct   = side >= 32;
+            const showTick  = side >= 20;
+            const tickSz    = side < 42 ? 8 : side < 62 ? 9 : side < 90 ? 10 : 11;
+            return (
+              <Link
+                key={stock.id}
+                href={`/stock/${stock.id}`}
+                onMouseEnter={e => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
+                onMouseMove={e  => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
+                style={{
+                  aspectRatio:     '1 / 1',
+                  backgroundColor: bg,
+                  border:          '1px solid rgba(0,0,0,.45)',
+                  boxSizing:       'border-box',
+                  overflow:        'hidden',
+                }}
+                className="flex flex-col items-center justify-center hover:brightness-110 transition-[filter] z-[1]"
+              >
+                {showLogo  && <Logo ticker={stock.id} size={logoSz} />}
+                {showTick  && (
+                  <span
+                    style={{ color: fg, fontSize: tickSz, lineHeight: 1.25 }}
+                    className={`font-mono font-bold tracking-wide${showLogo ? ' mt-1' : ''}`}
+                  >
+                    {stock.id}
+                  </span>
+                )}
+                {showPrice && snap && (
+                  <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
+                    {formatPrice(snap.price)}
+                  </span>
+                )}
+                {showPct && (
+                  <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono font-semibold">
+                    {loading ? '—' : snap ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'N/A'}
+                  </span>
+                )}
+              </Link>
+            );
+          };
 
           return (
             <div
@@ -256,66 +338,17 @@ export function StockHeatmap() {
                 </span>
               </div>
 
-              {/* square tile grid — CSS grid + aspect-ratio:1 guarantees exact squares */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: `repeat(${cols}, 1fr)`,
-                  gap: 1,
-                  width: '100%',
-                }}
-              >
-                {sorted.map(stock => {
-                  const snap = snaps[stock.id];
-                  const pct  = snap?.changePercent ?? 0;
-                  const bg   = loading ? '#181820' : tileBg(pct);
-                  const fg   = loading ? '#444'    : tileFg(pct);
-
-                  const showLogo  = side >= 58;
-                  const logoSz    = Math.min(Math.floor(side * 0.34), 38);
-                  const showPrice = side >= 78;
-                  const showPct   = side >= 32;
-                  const showTick  = side >= 20;
-                  const tickSz    = side < 42 ? 8 : side < 62 ? 9 : side < 90 ? 10 : 11;
-
-                  return (
-                    <Link
-                      key={stock.id}
-                      href={`/stock/${stock.id}`}
-                      onMouseEnter={e => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
-                      onMouseMove={e  => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
-                      style={{
-                        aspectRatio:     '1 / 1',
-                        backgroundColor: bg,
-                        border:          '1px solid rgba(0,0,0,.45)',
-                        boxSizing:       'border-box',
-                        overflow:        'hidden',
-                      }}
-                      className="flex flex-col items-center justify-center hover:brightness-110 transition-[filter] z-[1]"
-                    >
-                      {showLogo  && <Logo ticker={stock.id} size={logoSz} />}
-                      {showTick  && (
-                        <span
-                          style={{ color: fg, fontSize: tickSz, lineHeight: 1.25 }}
-                          className={`font-mono font-bold tracking-wide${showLogo ? ' mt-1' : ''}`}
-                        >
-                          {stock.id}
-                        </span>
-                      )}
-                      {showPrice && snap && (
-                        <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
-                          {formatPrice(snap.price)}
-                        </span>
-                      )}
-                      {showPct && (
-                        <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono font-semibold">
-                          {loading ? '—' : snap ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'N/A'}
-                        </span>
-                      )}
-                    </Link>
-                  );
-                })}
+              {/* large-cap tier — fewer columns → bigger squares */}
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${colsL}, 1fr)`, gap: 1 }}>
+                {large.map(s => renderTile(s, sideL))}
               </div>
+
+              {/* small-cap tier — more columns → smaller squares */}
+              {small.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${colsS}, 1fr)`, gap: 1 }}>
+                  {small.map(s => renderTile(s, sideS))}
+                </div>
+              )}
             </div>
           );
         })}
