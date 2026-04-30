@@ -6,11 +6,13 @@ import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
 /* ─── types ───────────────────────────────────────────────────────────────── */
-interface StockEntry { id: string; mc: number }
-interface SectorDef  { name: string; short: string; stocks: StockEntry[] }
+interface StockEntry  { id: string; mc: number }
+interface SectorDef   { name: string; short: string; stocks: StockEntry[] }
+interface Tile        { id: string; x: number; y: number; w: number; h: number }
 interface SectorBlock {
-  name: string; short: string; stocks: StockEntry[];
+  name: string; short: string;
   x: number; y: number; w: number; h: number;
+  tiles: Tile[];
 }
 
 /* ─── sectors (GICS-style) ────────────────────────────────────────────────── */
@@ -82,26 +84,125 @@ const SECTORS: SectorDef[] = [
 ];
 
 const ALL_TICKERS = SECTORS.flatMap(s => s.stocks.map(t => t.id));
+const sqrtMC = (mc: number) => Math.sqrt(mc);
 
 /* ─── canvas ──────────────────────────────────────────────────────────────── */
-const CANVAS_H   = 620;
-const SECTOR_GAP = 3;
+const CANVAS_H   = 600;
+const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
 
-/* ─── sector partition (unchanged — sets sector rects, not tile rects) ─────── */
+/* ─── tile layout ─────────────────────────────────────────────────────────── */
 type Rect = { x: number; y: number; w: number; h: number };
 
+function placeTiles(
+  stocks: StockEntry[], x: number, startY: number,
+  cols: number, tileH: number, totalW: number,
+): Tile[] {
+  const tiles: Tile[] = [];
+  const rows = Math.ceil(stocks.length / cols);
+  for (let i = 0; i < stocks.length; i++) {
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    const rem = stocks.length % cols;
+    const isLast = row === rows - 1 && rem !== 0;
+    const effectiveCols = isLast ? rem : cols;
+    tiles.push({
+      id: stocks[i].id,
+      x:  x + col * (totalW / effectiveCols),
+      y:  startY + row * tileH,
+      w:  totalW / effectiveCols,
+      h:  tileH,
+    });
+  }
+  return tiles;
+}
+
+/**
+ * Two-tier layout: splits stocks into large (top) and small (bottom) groups
+ * based on mc^0.25 relative to the sector max, then finds column counts that
+ * make both tiers together fill the sector height exactly.
+ */
+function twoTierLayout(stocks: StockEntry[], rect: Rect): Tile[] {
+  const { x, y, w, h } = rect;
+  const n = stocks.length;
+  if (n === 0 || w < 4 || h < 4) return [];
+
+  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
+  const maxNorm = Math.pow(sorted[0].mc, 0.25);
+  const splitIdx = sorted.findIndex(s => Math.pow(s.mc, 0.25) < 0.70 * maxNorm);
+
+  if (splitIdx <= 0) {
+    // single tier — uniform grid
+    let bestCols = 1, bestRatio = Infinity;
+    for (let c = 1; c <= n; c++) {
+      const rows = Math.ceil(n / c);
+      const ratio = Math.max(w / c / (h / rows), h / rows / (w / c));
+      if (ratio < bestRatio) { bestRatio = ratio; bestCols = c; }
+    }
+    const rows = Math.ceil(n / bestCols);
+    return placeTiles(sorted, x, y, bestCols, h / rows, w);
+  }
+
+  const large = sorted.slice(0, splitIdx);
+  const small = sorted.slice(splitIdx);
+
+  // Search for column counts that minimise |hLarge + hSmall - h|
+  let bestCL = 1, bestCS = 2, bestScore = Infinity;
+  for (let cL = 1; cL <= large.length; cL++) {
+    for (let cS = cL + 1; cS <= n; cS++) {
+      const hL = Math.ceil(large.length / cL) * (w / cL);
+      const hS = Math.ceil(small.length / cS) * (w / cS);
+      const score = Math.abs(hL + hS - h);
+      if (score < bestScore) { bestScore = score; bestCL = cL; bestCS = cS; }
+    }
+  }
+
+  const rowsL = Math.ceil(large.length / bestCL);
+  const rowsS = Math.ceil(small.length / bestCS);
+  const hL = rowsL * (w / bestCL);
+  const hS = rowsS * (w / bestCS);
+  const scale = h / (hL + hS);
+  const tileHL = (w / bestCL) * scale;
+  const tileHS = (w / bestCS) * scale;
+  const splitY = y + rowsL * tileHL;
+
+  return [
+    ...placeTiles(large, x, y,      bestCL, tileHL, w),
+    ...placeTiles(small, x, splitY, bestCS, tileHS, w),
+  ];
+}
+
+/* ─── nested layout ───────────────────────────────────────────────────────── */
 interface SectorWithWeight extends SectorDef { weight: number }
 
+/**
+ * Recursive binary partition — guarantees a 2-D mosaic for the sector layer.
+ * Splits the current rectangle along its longer axis, proportional to the
+ * cumulative weight of each group, then recurses until each sector occupies
+ * its own sub-rectangle. layoutTiles() fills stock tiles within each sector.
+ */
 function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[] {
   if (sectors.length === 0) return [];
 
   if (sectors.length === 1) {
     const s = sectors[0];
-    return [{ name: s.name, short: s.short, stocks: s.stocks, ...rect }];
+    if (rect.w < 2 || rect.h < 2) {
+      return [{ name: s.name, short: s.short, ...rect, tiles: [] }];
+    }
+    const inner: Rect = {
+      x: rect.x + SECTOR_GAP,
+      y: rect.y + SECTOR_GAP,
+      w: rect.w - SECTOR_GAP * 2,
+      h: rect.h - SECTOR_GAP * 2,
+    };
+    const tiles = twoTierLayout(s.stocks, inner);
+    return [{ name: s.name, short: s.short, ...rect, tiles }];
   }
 
+  // Find the split index that balances the two groups' weights most evenly
   const total = sectors.reduce((sum, s) => sum + s.weight, 0);
-  let bestIdx = 1, bestDiff = Infinity, acc = 0;
+  let bestIdx = 1;
+  let bestDiff = Infinity;
+  let acc = 0;
   for (let i = 0; i < sectors.length - 1; i++) {
     acc += sectors[i].weight;
     const diff = Math.abs(acc * 2 - total);
@@ -110,70 +211,29 @@ function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[
 
   const g1 = sectors.slice(0, bestIdx);
   const g2 = sectors.slice(bestIdx);
-  const ratio = g1.reduce((s, x) => s + x.weight, 0) / total;
+  const w1 = g1.reduce((sum, s) => sum + s.weight, 0);
+  const ratio = w1 / total;
 
+  // Split along the longer dimension
   if (rect.w >= rect.h) {
     const split = Math.round(ratio * rect.w);
-    return [
-      ...partitionSectors(g1, { x: rect.x,         y: rect.y, w: split,          h: rect.h }),
-      ...partitionSectors(g2, { x: rect.x + split,  y: rect.y, w: rect.w - split, h: rect.h }),
-    ];
+    const r1: Rect = { x: rect.x,         y: rect.y, w: split,           h: rect.h };
+    const r2: Rect = { x: rect.x + split,  y: rect.y, w: rect.w - split,  h: rect.h };
+    return [...partitionSectors(g1, r1), ...partitionSectors(g2, r2)];
+  } else {
+    const split = Math.round(ratio * rect.h);
+    const r1: Rect = { x: rect.x, y: rect.y,         w: rect.w, h: split          };
+    const r2: Rect = { x: rect.x, y: rect.y + split,  w: rect.w, h: rect.h - split };
+    return [...partitionSectors(g1, r1), ...partitionSectors(g2, r2)];
   }
-  const split = Math.round(ratio * rect.h);
-  return [
-    ...partitionSectors(g1, { x: rect.x, y: rect.y,         w: rect.w, h: split          }),
-    ...partitionSectors(g2, { x: rect.x, y: rect.y + split, w: rect.w, h: rect.h - split }),
-  ];
 }
 
 function buildLayout(W: number, H: number): SectorBlock[] {
   const sorted: SectorWithWeight[] = SECTORS
-    .map(s => ({
-      ...s,
-      weight: s.stocks.reduce((sum, t) => sum + Math.sqrt(t.mc), 0),
-    }))
+    .map(s => ({ ...s, weight: s.stocks.reduce((sum, t) => sum + sqrtMC(t.mc), 0) }))
     .sort((a, b) => b.weight - a.weight);
+
   return partitionSectors(sorted, { x: 0, y: 0, w: W, h: H });
-}
-
-/* ─── two-tier grid layout ───────────────────────────────────────────────── */
-/**
- * Splits stocks into "large" (mc^0.25 >= 70 % of sector max) and "small" tiers.
- * Returns the column count for each tier chosen so their combined CSS-grid
- * heights sum as close as possible to `ih`. Because tiles use aspect-ratio:1,
- * tile size = sectionWidth / cols — so largeColsL < colsS gives subtly bigger
- * squares for the large tier without being drastic.
- */
-function twoTierCols(
-  stocks: StockEntry[],
-  iw: number,
-  ih: number,
-): { large: StockEntry[]; small: StockEntry[]; colsL: number; colsS: number } {
-  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
-  const n = sorted.length;
-  const maxNorm = Math.pow(sorted[0].mc, 0.25);
-  const splitAt  = sorted.findIndex(s => Math.pow(s.mc, 0.25) < 0.70 * maxNorm);
-  const large    = splitAt <= 0 ? sorted : sorted.slice(0, splitAt);
-  const small    = splitAt <= 0 ? []     : sorted.slice(splitAt);
-
-  // Single-tier fallback
-  if (small.length === 0) {
-    const cols = Math.max(1, Math.ceil(Math.sqrt(n * iw / ih)));
-    return { large: sorted, small: [], colsL: cols, colsS: cols };
-  }
-
-  // Search (colsL, colsS) to fill ih; constrain size ratio to ≤ 2×
-  let bestCL = 1, bestCS = 2, bestDiff = Infinity;
-  for (let cL = 1; cL <= large.length; cL++) {
-    for (let cS = cL + 1; cS <= n; cS++) {
-      if (iw / cS < (iw / cL) * 0.45) break; // tile ratio > ~2.2× — too drastic
-      const hL = Math.ceil(large.length / cL) * (iw / cL);
-      const hS = Math.ceil(small.length / cS) * (iw / cS);
-      const diff = Math.abs(hL + hS - ih);
-      if (diff < bestDiff) { bestDiff = diff; bestCL = cL; bestCS = cS; }
-    }
-  }
-  return { large, small, colsL: bestCL, colsS: bestCS };
 }
 
 /* ─── colour scale ────────────────────────────────────────────────────────── */
@@ -231,8 +291,8 @@ export function StockHeatmap() {
       .finally(() => setLoading(false));
   }, []);
 
-  const layout    = canvasW > 0 ? buildLayout(canvasW, CANVAS_H) : [];
-  const hoverSnap = tooltip ? snaps[tooltip.id] : null;
+  const layout     = canvasW > 0 ? buildLayout(canvasW, CANVAS_H) : [];
+  const hoverSnap  = tooltip ? snaps[tooltip.id] : null;
 
   return (
     <div className="border border-border rounded overflow-hidden bg-[#0a0a0a]">
@@ -253,105 +313,84 @@ export function StockHeatmap() {
         style={{ height: CANVAS_H }}
         onMouseLeave={() => setTooltip(null)}
       >
-        {layout.map(sector => {
-          if (sector.w < 4 || sector.h < 4) return null;
+        {layout.map(sector => sector.w > 0 && (
+          <div key={sector.name}>
 
-          const iw = sector.w - SECTOR_GAP * 2;
-          const ih = sector.h - SECTOR_GAP * 2;
-          const { large, small, colsL, colsS } = twoTierCols(sector.stocks, iw, ih);
-          const sideL = iw / colsL;
-          const sideS = iw / colsS;
-
-          const renderTile = (stock: StockEntry, side: number) => {
-            const snap = snaps[stock.id];
-            const pct  = snap?.changePercent ?? 0;
-            const bg   = loading ? '#181820' : tileBg(pct);
-            const fg   = loading ? '#444'    : tileFg(pct);
-            const showLogo  = side >= 58;
-            const logoSz    = Math.min(Math.floor(side * 0.34), 38);
-            const showPrice = side >= 78;
-            const showPct   = side >= 32;
-            const showTick  = side >= 20;
-            const tickSz    = side < 42 ? 8 : side < 62 ? 9 : side < 90 ? 10 : 11;
-            return (
-              <Link
-                key={stock.id}
-                href={`/stock/${stock.id}`}
-                onMouseEnter={e => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
-                onMouseMove={e  => setTooltip({ id: stock.id, cx: e.clientX, cy: e.clientY })}
-                style={{
-                  aspectRatio:     '1 / 1',
-                  backgroundColor: bg,
-                  border:          '1px solid rgba(0,0,0,.45)',
-                  boxSizing:       'border-box',
-                  overflow:        'hidden',
-                }}
-                className="flex flex-col items-center justify-center hover:brightness-110 transition-[filter] z-[1]"
-              >
-                {showLogo  && <Logo ticker={stock.id} size={logoSz} />}
-                {showTick  && (
-                  <span
-                    style={{ color: fg, fontSize: tickSz, lineHeight: 1.25 }}
-                    className={`font-mono font-bold tracking-wide${showLogo ? ' mt-1' : ''}`}
-                  >
-                    {stock.id}
-                  </span>
-                )}
-                {showPrice && snap && (
-                  <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
-                    {formatPrice(snap.price)}
-                  </span>
-                )}
-                {showPct && (
-                  <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono font-semibold">
-                    {loading ? '—' : snap ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'N/A'}
-                  </span>
-                )}
-              </Link>
-            );
-          };
-
-          return (
+            {/* sector name label — floating gradient over the top-left of the block */}
             <div
-              key={sector.name}
               style={{
                 position: 'absolute',
-                left:     sector.x + SECTOR_GAP,
-                top:      sector.y + SECTOR_GAP,
-                width:    iw,
-                height:   ih,
-                background: '#0d0d18',
-                overflow: 'hidden',
+                left: sector.x + SECTOR_GAP,
+                top:  sector.y + SECTOR_GAP,
+                width: sector.w - SECTOR_GAP * 2,
+                height: 20,
+                background: 'linear-gradient(to bottom,rgba(0,0,0,.65) 0%,transparent 100%)',
+                zIndex: 6,
+                pointerEvents: 'none',
               }}
+              className="flex items-start pt-1 pl-1.5 overflow-hidden"
             >
-              {/* sector label */}
-              <div
-                style={{
-                  position: 'absolute', top: 0, left: 0, right: 0, height: 20,
-                  background: 'linear-gradient(to bottom,rgba(0,0,0,.7) 0%,transparent 100%)',
-                  zIndex: 6, pointerEvents: 'none',
-                  display: 'flex', alignItems: 'flex-start', paddingTop: 3, paddingLeft: 6,
-                }}
-              >
-                <span className="font-mono text-[9px] font-semibold text-white/55 uppercase tracking-widest leading-none truncate">
-                  {iw > 100 ? sector.name : sector.short}
-                </span>
-              </div>
-
-              {/* large-cap tier — fewer columns → bigger squares */}
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${colsL}, 1fr)`, gap: 1 }}>
-                {large.map(s => renderTile(s, sideL))}
-              </div>
-
-              {/* small-cap tier — more columns → smaller squares */}
-              {small.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${colsS}, 1fr)`, gap: 1 }}>
-                  {small.map(s => renderTile(s, sideS))}
-                </div>
-              )}
+              <span className="font-mono text-[9px] font-semibold text-white/55 uppercase tracking-widest leading-none truncate">
+                {sector.w > 100 ? sector.name : sector.short}
+              </span>
             </div>
-          );
-        })}
+
+            {/* stock tiles */}
+            {sector.tiles.map(tile => {
+              const snap = snaps[tile.id];
+              const pct  = snap?.changePercent ?? 0;
+              const bg   = loading ? '#181820' : tileBg(pct);
+              const fg   = loading ? '#444'    : tileFg(pct);
+
+              const showLogo  = tile.w >= 58 && tile.h >= 50;
+              const logoSz    = Math.min(Math.floor(Math.min(tile.w, tile.h) * 0.34), 38);
+              const showPrice = tile.w >= 78 && tile.h >= 72;
+              const showPct   = tile.w >= 32 && tile.h >= 24;
+              const showTick  = tile.w >= 20 && tile.h >= 14;
+              const tickSz    = tile.w < 42 ? 8 : tile.w < 62 ? 9 : tile.w < 90 ? 10 : 11;
+
+              return (
+                <Link
+                  key={tile.id}
+                  href={`/stock/${tile.id}`}
+                  onMouseEnter={e => setTooltip({ id: tile.id, cx: e.clientX, cy: e.clientY })}
+                  onMouseMove={e  => setTooltip({ id: tile.id, cx: e.clientX, cy: e.clientY })}
+                  style={{
+                    position:        'absolute',
+                    left:            tile.x,
+                    top:             tile.y,
+                    width:           tile.w,
+                    height:          tile.h,
+                    backgroundColor: bg,
+                    border:          '1px solid rgba(0,0,0,.55)',
+                    boxSizing:       'border-box',
+                  }}
+                  className="flex flex-col items-center justify-center overflow-hidden hover:brightness-110 transition-[filter] z-[1]"
+                >
+                  {showLogo  && <Logo ticker={tile.id} size={logoSz} />}
+                  {showTick  && (
+                    <span
+                      style={{ color: fg, fontSize: tickSz, lineHeight: 1.25 }}
+                      className={`font-mono font-bold tracking-wide${showLogo ? ' mt-1' : ''}`}
+                    >
+                      {tile.id}
+                    </span>
+                  )}
+                  {showPrice && snap && (
+                    <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono opacity-75">
+                      {formatPrice(snap.price)}
+                    </span>
+                  )}
+                  {showPct && (
+                    <span style={{ color: fg, fontSize: tickSz - 1, lineHeight: 1.25 }} className="font-mono font-semibold">
+                      {loading ? '—' : snap ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'N/A'}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
 
         {/* hover tooltip */}
         {tooltip && hoverSnap && (
