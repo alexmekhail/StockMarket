@@ -110,8 +110,8 @@ Intraday Range Position: ${intradayPosition}`;
     });
 
     if (!res.ok) {
-      console.error('[/api/insights] Gemini error:', res.status, await res.text());
-      return NextResponse.json(FALLBACK);
+      const errText = await res.text();
+      return NextResponse.json({ ...FALLBACK, _debug: `gemini_${res.status}`, _err: errText });
     }
 
     const data = await res.json();
@@ -131,7 +131,6 @@ Intraday Range Position: ${intradayPosition}`;
     cache.set(ticker, result);
     return NextResponse.json(result);
   } catch (err) {
-    console.error('[/api/insights]', err);
-    return NextResponse.json(FALLBACK);
+    return NextResponse.json({ ...FALLBACK, _debug: 'exception', _err: String(err) });
   }
 }
