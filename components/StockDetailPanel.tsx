@@ -5,6 +5,7 @@ import { alpacaSocket } from '@/lib/alpacaSocket';
 import { StockChart } from '@/components/StockChart';
 import { NewsPanel } from '@/components/NewsPanel';
 import { PriceDisplay } from '@/components/PriceDisplay';
+import { StockInsights } from '@/components/StockInsights';
 import { Skeleton } from '@/components/Skeleton';
 import { useAuth } from '@/components/AuthProvider';
 import type { QuoteUpdate, Snapshot, ChartDataPoint, TimeRange } from '@/types';
@@ -182,6 +183,22 @@ export function StockDetailPanel({ ticker }: Props) {
       <div className="border-t border-border">
         <NewsPanel ticker={ticker} />
       </div>
+
+      {/* AI Insights */}
+      {snapshot && (
+        <StockInsights
+          ticker={ticker}
+          stockData={{
+            price: snapshot.price,
+            changePercent: snapshot.changePercent,
+            volume: snapshot.volume,
+            open: snapshot.open,
+            high: snapshot.high,
+            low: snapshot.low,
+            prevClose: snapshot.prevClose,
+          }}
+        />
+      )}
     </div>
   );
 }
