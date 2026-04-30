@@ -90,49 +90,46 @@ const sqrtMC = (mc: number) => Math.sqrt(mc);
 const CANVAS_H   = 600;
 const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
 
-/* ─── uniform grid layout ─────────────────────────────────────────────────── */
+/* ─── square tile layout ─────────────────────────────────────────────────── */
 type Rect = { x: number; y: number; w: number; h: number };
 
 /**
- * Lay stocks out as a uniform grid that fills `rect` completely.
- * Column count is chosen to minimise the max(w/h, h/w) aspect ratio so every
- * tile is as close to a square as the sector dimensions allow.
- * Stocks are sorted largest-first so the most important names appear top-left.
- * The last row stretches its tiles across the full width so no background
- * shows through (no black gaps).
+ * Binary-search for the largest square side `s` such that all n tiles fit
+ * inside `rect` (cols = floor(w/s), rows = ceil(n/cols), rows*s ≤ h).
+ * The resulting square grid is centred inside the rect so any leftover space
+ * is evenly split at the edges — it will show as the sector's background colour,
+ * not as a black gap. Stocks are sorted largest market-cap first.
  */
-function layoutGrid(stocks: StockEntry[], rect: Rect): Tile[] {
+function layoutSquares(stocks: StockEntry[], rect: Rect): Tile[] {
   const n = stocks.length;
   if (n === 0 || rect.w < 4 || rect.h < 4) return [];
 
   const { x, y, w, h } = rect;
   const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
 
-  let bestCols = 1;
-  let bestRatio = Infinity;
-  for (let cols = 1; cols <= n; cols++) {
+  // Largest s where all tiles still fit
+  let lo = 1, hi = Math.min(w, h);
+  for (let i = 0; i < 64; i++) {
+    const mid = (lo + hi) / 2;
+    const cols = Math.max(1, Math.floor(w / mid));
     const rows = Math.ceil(n / cols);
-    const ratio = Math.max(w / cols / (h / rows), h / rows / (w / cols));
-    if (ratio < bestRatio) { bestRatio = ratio; bestCols = cols; }
+    if (rows * mid <= h) lo = mid; else hi = mid;
   }
 
-  const cols  = bestCols;
-  const rows  = Math.ceil(n / cols);
-  const rem   = n % cols; // tiles in the last partial row (0 = full)
+  const s    = lo;
+  const cols = Math.max(1, Math.floor(w / s));
+  const rows = Math.ceil(n / cols);
+  // Centre the square grid so leftover space is split symmetrically
+  const ox   = x + (w - cols * s) / 2;
+  const oy   = y + (h - rows * s) / 2;
 
-  return sorted.map((stock, i) => {
-    const row  = Math.floor(i / cols);
-    const col  = i % cols;
-    const isLastRow = row === rows - 1 && rem !== 0;
-    const thisCols  = isLastRow ? rem : cols;
-    return {
-      id: stock.id,
-      x:  x + col * (w / thisCols),
-      y:  y + row * (h / rows),
-      w:  w / thisCols,
-      h:  h / rows,
-    };
-  });
+  return sorted.map((stock, i) => ({
+    id: stock.id,
+    x:  ox + (i % cols) * s,
+    y:  oy + Math.floor(i / cols) * s,
+    w:  s,
+    h:  s,
+  }));
 }
 
 /* ─── nested layout ───────────────────────────────────────────────────────── */
@@ -158,7 +155,7 @@ function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[
       w: rect.w - SECTOR_GAP * 2,
       h: rect.h - SECTOR_GAP * 2,
     };
-    const tiles = layoutGrid(s.stocks, inner);
+    const tiles = layoutSquares(s.stocks, inner);
     return [{ name: s.name, short: s.short, ...rect, tiles }];
   }
 
@@ -279,6 +276,19 @@ export function StockHeatmap() {
       >
         {layout.map(sector => sector.w > 0 && (
           <div key={sector.name}>
+
+            {/* sector inner background — fills edge space between square tiles so it reads as "sector" not black void */}
+            <div
+              style={{
+                position: 'absolute',
+                left:   sector.x + SECTOR_GAP,
+                top:    sector.y + SECTOR_GAP,
+                width:  sector.w - SECTOR_GAP * 2,
+                height: sector.h - SECTOR_GAP * 2,
+                background: '#0d0d18',
+                zIndex: 0,
+              }}
+            />
 
             {/* sector name label — floating gradient over the top-left of the block */}
             <div
