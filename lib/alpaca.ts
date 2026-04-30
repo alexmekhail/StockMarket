@@ -85,6 +85,58 @@ export async function fetchGeneralNews(limit = 20): Promise<NewsArticle[]> {
   }));
 }
 
+/** Converts bare symbol like "BTC" → "BTC/USD" for the Alpaca crypto API. */
+function toCryptoSymbol(s: string) {
+  return s.includes('/') ? s : `${s}/USD`;
+}
+
+export async function fetchCryptoSnapshots(symbols: string[]): Promise<Record<string, Snapshot>> {
+  const joined = symbols.map(toCryptoSymbol).join(',');
+  const res = await fetch(
+    `${BASE_URL}/v1beta3/crypto/us/snapshots?symbols=${encodeURIComponent(joined)}`,
+    { headers: alpacaHeaders(), next: { revalidate: 0 } }
+  );
+  if (!res.ok) throw new Error(`Alpaca crypto snapshots error: ${res.status}`);
+  const raw = await res.json();
+  const result: Record<string, Snapshot> = {};
+  for (const [sym, data] of Object.entries(raw.snapshots as Record<string, any>)) {
+    const bareSymbol = sym.replace('/USD', '');
+    const price = data.latestTrade?.p ?? data.minuteBar?.c ?? 0;
+    const prevClose = data.prevDailyBar?.c ?? price;
+    const change = price - prevClose;
+    const changePercent = prevClose !== 0 ? (change / prevClose) * 100 : 0;
+    result[bareSymbol] = {
+      ticker: bareSymbol,
+      price,
+      prevClose,
+      change,
+      changePercent,
+      open: data.dailyBar?.o ?? 0,
+      high: data.dailyBar?.h ?? 0,
+      low: data.dailyBar?.l ?? 0,
+      volume: data.dailyBar?.v ?? 0,
+    };
+  }
+  return result;
+}
+
+export async function fetchCryptoBars(
+  symbol: string,
+  timeframe: string,
+  start: string,
+  end: string
+): Promise<AlpacaBar[]> {
+  const cryptoSym = toCryptoSymbol(symbol);
+  const params = new URLSearchParams({ symbols: cryptoSym, timeframe, start, end, limit: '1000' });
+  const res = await fetch(
+    `${BASE_URL}/v1beta3/crypto/us/bars?${params}`,
+    { headers: alpacaHeaders(), next: { revalidate: 0 } }
+  );
+  if (!res.ok) throw new Error(`Alpaca crypto bars error: ${res.status}`);
+  const data = await res.json();
+  return data.bars?.[cryptoSym] ?? [];
+}
+
 export async function fetchNews(symbol: string, limit = 15): Promise<NewsArticle[]> {
   const params = new URLSearchParams({
     symbols: symbol,

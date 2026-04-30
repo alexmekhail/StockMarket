@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { searchTickers } from '@/lib/tickers';
 import type { TickerInfo } from '@/lib/tickers';
 import { StockDetailPanel } from '@/components/StockDetailPanel';
@@ -8,44 +9,66 @@ import type { Snapshot } from '@/types';
 import { formatPrice, formatChangePercent, isPositiveChange } from '@/lib/utils';
 
 export default function SearchPage() {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<TickerInfo[]>([]);
+  const [query, setQuery]       = useState('');
+  const [results, setResults]   = useState<TickerInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedType, setSelectedType] = useState<'stock' | 'crypto'>('stock');
   const [snapshots, setSnapshots] = useState<Record<string, Snapshot>>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focus input on mount
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // Search as user types
   useEffect(() => {
     const q = query.trim();
-    if (!q) {
-      setResults([]);
-      return;
-    }
-    const found = searchTickers(q, 20);
-    setResults(found);
+    if (!q) { setResults([]); return; }
+    setResults(searchTickers(q, 20));
   }, [query]);
 
-  // Fetch snapshots for results
+  // Fetch snapshots — split stocks and crypto, call separate endpoints
   useEffect(() => {
     if (results.length === 0) return;
-    const symbols = results.map((r) => r.symbol).join(',');
-    fetch(`/api/snapshots?symbols=${symbols}`)
-      .then((r) => r.json())
-      .then((data: Record<string, Snapshot>) => setSnapshots((prev) => ({ ...prev, ...data })))
-      .catch(console.error);
+    const stocks = results.filter((r) => r.type !== 'crypto').map((r) => r.symbol);
+    const crypto = results.filter((r) => r.type === 'crypto').map((r) => r.symbol);
+
+    const fetches: Promise<void>[] = [];
+
+    if (stocks.length > 0) {
+      fetches.push(
+        fetch(`/api/snapshots?symbols=${stocks.join(',')}`)
+          .then((r) => r.json())
+          .then((d: Record<string, Snapshot>) => setSnapshots((p) => ({ ...p, ...d })))
+          .catch(console.error)
+      );
+    }
+    if (crypto.length > 0) {
+      fetches.push(
+        fetch(`/api/crypto/snapshots?symbols=${crypto.join(',')}`)
+          .then((r) => r.json())
+          .then((d: Record<string, Snapshot>) => setSnapshots((p) => ({ ...p, ...d })))
+          .catch(console.error)
+      );
+    }
   }, [results]);
+
+  const hasResults = query && results.length > 0;
 
   return (
     <div className="max-w-screen-xl mx-auto px-4 py-6">
-      {/* Search bar */}
-      <div className="mb-6">
-        <div className="relative max-w-lg">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-mono text-sm">⌕</span>
+      {/* Search bar — centered hero when empty, compact top bar when results are shown */}
+      <div
+        className={`transition-all duration-300 mb-6 flex flex-col items-center ${
+          !hasResults ? 'justify-center min-h-[45vh]' : ''
+        }`}
+      >
+        {!hasResults && (
+          <div className="text-center mb-6">
+            <div className="text-5xl mb-3 opacity-20 font-mono text-text-muted select-none">⌕</div>
+            <p className="text-text-muted font-mono text-sm">Search stocks &amp; crypto</p>
+          </div>
+        )}
+
+        <div className="relative w-full max-w-xl">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-mono text-sm select-none">⌕</span>
           <input
             ref={inputRef}
             type="text"
@@ -65,16 +88,8 @@ export default function SearchPage() {
         </div>
       </div>
 
-      {/* Empty state */}
-      {!query && (
-        <div className="text-center py-20 text-text-muted font-mono text-sm">
-          <div className="text-4xl mb-4 opacity-30">⌕</div>
-          <p>Search for any stock ticker or company name to get started.</p>
-        </div>
-      )}
-
       {/* Results + Detail */}
-      {query && results.length > 0 && (
+      {hasResults && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           {/* Results list */}
           <div className="xl:col-span-1">
@@ -88,20 +103,32 @@ export default function SearchPage() {
                 {results.map((ticker) => {
                   const snap = snapshots[ticker.symbol];
                   const positive = snap ? isPositiveChange(snap.change) : true;
+                  const isCrypto = ticker.type === 'crypto';
                   const isSelected = selected === ticker.symbol;
+                  const href = isCrypto ? `/crypto/${ticker.symbol}` : `/stock/${ticker.symbol}`;
+
                   return (
                     <button
                       key={ticker.symbol}
-                      onClick={() => setSelected(ticker.symbol)}
+                      onClick={() => { setSelected(ticker.symbol); setSelectedType(isCrypto ? 'crypto' : 'stock'); }}
                       className={`w-full flex items-center justify-between px-4 py-3 border-b border-border last:border-b-0 transition-colors text-left ${
                         isSelected ? 'bg-bg-hover border-l-2 border-l-accent' : 'hover:bg-bg-hover'
                       }`}
                     >
-                      <div className="min-w-0">
-                        <div className="font-mono font-semibold text-sm text-text-primary tracking-wider">
-                          {ticker.symbol}
+                      <div className="min-w-0 flex items-center gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-semibold text-sm text-text-primary tracking-wider">
+                              {ticker.symbol}
+                            </span>
+                            {isCrypto && (
+                              <span className="text-[9px] font-mono px-1 py-px rounded border border-amber-500/40 text-amber-400 bg-amber-500/10 uppercase leading-none">
+                                crypto
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-sans text-xs text-text-muted truncate">{ticker.name}</div>
                         </div>
-                        <div className="font-sans text-xs text-text-muted truncate">{ticker.name}</div>
                       </div>
                       {snap && (
                         <div className="text-right ml-3 flex-shrink-0">
@@ -121,10 +148,22 @@ export default function SearchPage() {
           {/* Detail panel */}
           <div className="xl:col-span-2">
             {selected ? (
-              <StockDetailPanel ticker={selected} />
+              selectedType === 'crypto' ? (
+                <div className="border border-border rounded flex flex-col items-center justify-center h-64 gap-3">
+                  <p className="text-text-muted font-mono text-sm">View full chart for {selected}</p>
+                  <Link
+                    href={`/crypto/${selected}`}
+                    className="font-mono text-xs px-4 py-2 rounded border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 transition-colors"
+                  >
+                    Open {selected} →
+                  </Link>
+                </div>
+              ) : (
+                <StockDetailPanel ticker={selected} />
+              )
             ) : (
               <div className="border border-border rounded flex items-center justify-center h-64">
-                <p className="text-text-muted font-mono text-sm">Select a stock to view details</p>
+                <p className="text-text-muted font-mono text-sm">Select a result to view details</p>
               </div>
             )}
           </div>

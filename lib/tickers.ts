@@ -1,7 +1,26 @@
 export interface TickerInfo {
   symbol: string;
   name: string;
+  type?: 'stock' | 'crypto';
 }
+
+export const CRYPTO_TICKERS: TickerInfo[] = [
+  { symbol: 'BTC', name: 'Bitcoin', type: 'crypto' },
+  { symbol: 'ETH', name: 'Ethereum', type: 'crypto' },
+  { symbol: 'SOL', name: 'Solana', type: 'crypto' },
+  { symbol: 'XRP', name: 'XRP', type: 'crypto' },
+  { symbol: 'DOGE', name: 'Dogecoin', type: 'crypto' },
+  { symbol: 'ADA', name: 'Cardano', type: 'crypto' },
+  { symbol: 'AVAX', name: 'Avalanche', type: 'crypto' },
+  { symbol: 'LINK', name: 'Chainlink', type: 'crypto' },
+  { symbol: 'DOT', name: 'Polkadot', type: 'crypto' },
+  { symbol: 'LTC', name: 'Litecoin', type: 'crypto' },
+  { symbol: 'UNI', name: 'Uniswap', type: 'crypto' },
+  { symbol: 'AAVE', name: 'Aave', type: 'crypto' },
+  { symbol: 'SHIB', name: 'Shiba Inu', type: 'crypto' },
+  { symbol: 'MATIC', name: 'Polygon (MATIC)', type: 'crypto' },
+  { symbol: 'BCH', name: 'Bitcoin Cash', type: 'crypto' },
+];
 
 export const POPULAR_TICKERS: TickerInfo[] = [
   // Electronic Technology
@@ -192,11 +211,13 @@ export const POPULAR_TICKERS: TickerInfo[] = [
   { symbol: 'EQIX', name: 'Equinix Inc.' },
 ];
 
+const ALL_SEARCHABLE = [...CRYPTO_TICKERS, ...POPULAR_TICKERS];
+
 export function searchTickers(query: string, limit = 8): TickerInfo[] {
   if (!query.trim()) return [];
   const q = query.toUpperCase();
-  const symbolMatches = POPULAR_TICKERS.filter((t) => t.symbol.startsWith(q));
-  const nameMatches = POPULAR_TICKERS.filter(
+  const symbolMatches = ALL_SEARCHABLE.filter((t) => t.symbol.startsWith(q));
+  const nameMatches = ALL_SEARCHABLE.filter(
     (t) => !t.symbol.startsWith(q) && t.name.toUpperCase().includes(q)
   );
   return [...symbolMatches, ...nameMatches].slice(0, limit);
