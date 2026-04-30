@@ -52,8 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    console.error('[/api/insights] ANTHROPIC_API_KEY not set');
-    return NextResponse.json(FALLBACK);
+    return NextResponse.json({ ...FALLBACK, _debug: 'no key' });
   }
 
   const now = Date.now();
@@ -114,8 +113,8 @@ Intraday Range Position: ${intradayPosition}`,
     });
 
     if (!res.ok) {
-      console.error('[/api/insights] Anthropic error:', res.status, await res.text());
-      return NextResponse.json(FALLBACK);
+      const errText = await res.text();
+      return NextResponse.json({ ...FALLBACK, _debug: `anthropic_${res.status}`, _err: errText });
     }
 
     const data = await res.json();
@@ -125,14 +124,12 @@ Intraday Range Position: ${intradayPosition}`,
     try {
       result = JSON.parse(text);
     } catch {
-      console.error('[/api/insights] JSON parse failed:', text);
-      result = FALLBACK;
+      return NextResponse.json({ ...FALLBACK, _debug: 'json_parse', _raw: text });
     }
 
     cache.set(ticker, result);
     return NextResponse.json(result);
   } catch (err) {
-    console.error('[/api/insights]', err);
-    return NextResponse.json(FALLBACK);
+    return NextResponse.json({ ...FALLBACK, _debug: 'exception', _err: String(err) });
   }
 }
