@@ -96,7 +96,7 @@ Previous Close: $${body.prevClose}
 Price vs Open: ${priceVsOpen}
 Intraday Range Position: ${intradayPosition}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
 
   try {
     const res = await fetch(url, {
@@ -105,13 +105,13 @@ Intraday Range Position: ${intradayPosition}`;
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 512 },
+        generationConfig: { temperature: 0.3, maxOutputTokens: 512, responseMimeType: 'application/json' },
       }),
     });
 
     if (!res.ok) {
-      const errText = await res.text();
-      return NextResponse.json({ ...FALLBACK, _debug: `gemini_${res.status}`, _err: errText });
+      console.error('[/api/insights] Gemini error:', res.status, await res.text());
+      return NextResponse.json(FALLBACK);
     }
 
     const data = await res.json();
@@ -131,6 +131,7 @@ Intraday Range Position: ${intradayPosition}`;
     cache.set(ticker, result);
     return NextResponse.json(result);
   } catch (err) {
-    return NextResponse.json({ ...FALLBACK, _debug: 'exception', _err: String(err) });
+    console.error('[/api/insights]', err);
+    return NextResponse.json(FALLBACK);
   }
 }
