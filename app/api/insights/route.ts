@@ -96,7 +96,7 @@ Previous Close: $${body.prevClose}
 Price vs Open: ${priceVsOpen}
 Intraday Range Position: ${intradayPosition}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
 
   try {
     const res = await fetch(url, {
@@ -110,8 +110,8 @@ Intraday Range Position: ${intradayPosition}`;
     });
 
     if (!res.ok) {
-      const e = await res.text();
-      return NextResponse.json({ ...FALLBACK, _s: res.status, _e: e.slice(0, 300) });
+      console.error('[/api/insights] Gemini error:', res.status, await res.text());
+      return NextResponse.json(FALLBACK);
     }
 
     const data = await res.json();
