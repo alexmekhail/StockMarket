@@ -7,6 +7,7 @@ import { StockChart } from '@/components/StockChart';
 import { NewsPanel } from '@/components/NewsPanel';
 import { PriceDisplay } from '@/components/PriceDisplay';
 import { Skeleton } from '@/components/Skeleton';
+import { StockInsights } from '@/components/StockInsights';
 import { useAuth } from '@/components/AuthProvider';
 import type { QuoteUpdate, Snapshot, ChartDataPoint, TimeRange } from '@/types';
 import { isPositiveChange, formatVolume, formatPrice } from '@/lib/utils';
@@ -183,8 +184,26 @@ export default function StockPage() {
         </div>
       </div>
 
-      {/* News */}
-      <NewsPanel ticker={ticker} />
+      {/* News (1/3) | AI Insights (2/3) */}
+      <div className="border border-border rounded overflow-hidden grid grid-cols-3 min-h-[400px]">
+        <div className="col-span-1 border-r border-border overflow-y-auto">
+          <NewsPanel ticker={ticker} />
+        </div>
+        <div className="col-span-2 overflow-y-auto">
+          <StockInsights
+            ticker={ticker}
+            stockData={snapshot ? {
+              price: snapshot.price,
+              changePercent: snapshot.changePercent,
+              volume: snapshot.volume,
+              open: snapshot.open,
+              high: snapshot.high,
+              low: snapshot.low,
+              prevClose: snapshot.prevClose,
+            } : null}
+          />
+        </div>
+      </div>
     </div>
   );
 }
