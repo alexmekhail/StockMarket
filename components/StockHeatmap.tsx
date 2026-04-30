@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import { squarify } from '@/lib/treemap';
 import type { Snapshot } from '@/types';
 import { formatPrice } from '@/lib/utils';
 
@@ -91,20 +90,49 @@ const sqrtMC = (mc: number) => Math.sqrt(mc);
 const CANVAS_H   = 600;
 const SECTOR_GAP = 3; // px gap between sector blocks (dark background shows through)
 
-/* ─── square tile packing ─────────────────────────────────────────────────── */
+/* ─── uniform grid layout ─────────────────────────────────────────────────── */
 type Rect = { x: number; y: number; w: number; h: number };
 
 /**
- * Fill the sector rectangle completely using squarify(√mc).
- * Tiles are whatever shape squarify assigns — aspect ratios stay close to 1:1
- * and every pixel is used (no black gaps, no overflow, every stock visible).
+ * Lay stocks out as a uniform grid that fills `rect` completely.
+ * Column count is chosen to minimise the max(w/h, h/w) aspect ratio so every
+ * tile is as close to a square as the sector dimensions allow.
+ * Stocks are sorted largest-first so the most important names appear top-left.
+ * The last row stretches its tiles across the full width so no background
+ * shows through (no black gaps).
  */
-function layoutTiles(stocks: StockEntry[], rect: Rect): Tile[] {
-  if (stocks.length === 0 || rect.w < 4 || rect.h < 4) return [];
-  return squarify(
-    stocks.map(s => ({ id: s.id, value: Math.sqrt(s.mc) })),
-    rect,
-  );
+function layoutGrid(stocks: StockEntry[], rect: Rect): Tile[] {
+  const n = stocks.length;
+  if (n === 0 || rect.w < 4 || rect.h < 4) return [];
+
+  const { x, y, w, h } = rect;
+  const sorted = [...stocks].sort((a, b) => b.mc - a.mc);
+
+  let bestCols = 1;
+  let bestRatio = Infinity;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const ratio = Math.max(w / cols / (h / rows), h / rows / (w / cols));
+    if (ratio < bestRatio) { bestRatio = ratio; bestCols = cols; }
+  }
+
+  const cols  = bestCols;
+  const rows  = Math.ceil(n / cols);
+  const rem   = n % cols; // tiles in the last partial row (0 = full)
+
+  return sorted.map((stock, i) => {
+    const row  = Math.floor(i / cols);
+    const col  = i % cols;
+    const isLastRow = row === rows - 1 && rem !== 0;
+    const thisCols  = isLastRow ? rem : cols;
+    return {
+      id: stock.id,
+      x:  x + col * (w / thisCols),
+      y:  y + row * (h / rows),
+      w:  w / thisCols,
+      h:  h / rows,
+    };
+  });
 }
 
 /* ─── nested layout ───────────────────────────────────────────────────────── */
@@ -130,7 +158,7 @@ function partitionSectors(sectors: SectorWithWeight[], rect: Rect): SectorBlock[
       w: rect.w - SECTOR_GAP * 2,
       h: rect.h - SECTOR_GAP * 2,
     };
-    const tiles = layoutTiles(s.stocks, inner);
+    const tiles = layoutGrid(s.stocks, inner);
     return [{ name: s.name, short: s.short, ...rect, tiles }];
   }
 
@@ -238,7 +266,7 @@ export function StockHeatmap() {
           Market Heatmap
         </span>
         <span className="text-xs font-mono text-text-muted">
-          Size = Market Cap · Color = Daily % Change
+          Sector size = Market Cap · Color = Daily % Change
         </span>
       </div>
 
