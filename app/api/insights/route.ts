@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json(FALLBACK);
+    return NextResponse.json({ ...FALLBACK, _s: 'no_key' });
   }
 
   const now = Date.now();
@@ -112,7 +112,8 @@ Intraday Range Position: ${intradayPosition}`;
     });
 
     if (!res.ok) {
-      return NextResponse.json(FALLBACK);
+      const e = await res.text();
+      return NextResponse.json({ ...FALLBACK, _s: res.status, _e: e.slice(0, 300) });
     }
 
     const data = await res.json();
@@ -124,12 +125,12 @@ Intraday Range Position: ${intradayPosition}`;
     try {
       result = JSON.parse(text);
     } catch {
-      return NextResponse.json(FALLBACK);
+      return NextResponse.json({ ...FALLBACK, _s: 'parse_fail', _raw: raw.slice(0, 300) });
     }
 
     cache.set(ticker, result);
     return NextResponse.json(result);
-  } catch {
-    return NextResponse.json(FALLBACK);
+  } catch (err) {
+    return NextResponse.json({ ...FALLBACK, _s: 'exception', _e: String(err) });
   }
 }
