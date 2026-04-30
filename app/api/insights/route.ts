@@ -33,7 +33,7 @@ const FALLBACK: InsightResult = {
 };
 
 // In-memory rate limit + result cache (resets on server restart)
-// Add to Vercel env vars: GEMINI_API_KEY
+// Add to Vercel env vars: ANTHROPIC_API_KEY (console.anthropic.com)
 const lastCalled = new Map<string, number>();
 const cache = new Map<string, InsightResult>();
 const RATE_LIMIT_MS = 60_000;
@@ -61,8 +61,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing ticker' }, { status: 400 });
   }
 
-  if (!process.env.GEMINI_API_KEY) {
-    return NextResponse.json({ ...FALLBACK, _s: 'no_key' });
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('[/api/insights] ANTHROPIC_API_KEY not set');
+    return NextResponse.json(FALLBACK);
   }
 
   const now = Date.now();
@@ -95,33 +96,33 @@ Previous Close: $${body.prevClose}
 Price vs Open: ${priceVsOpen}
 Intraday Range Position: ${intradayPosition}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
   try {
-    const res = await fetch(url, {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 512, responseMimeType: 'application/json' },
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 512,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userPrompt }],
       }),
     });
 
     if (!res.ok) {
-      const e = await res.text();
-      return NextResponse.json({ ...FALLBACK, _s: res.status, _e: e.slice(0, 400) });
+      console.error('[/api/insights] Anthropic error:', res.status, await res.text());
+      return NextResponse.json(FALLBACK);
     }
 
     const data = await res.json();
-    const text: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-
-    // Strip markdown fences if the model wraps output anyway
-    const clean = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const text: string = data.content?.[0]?.text ?? '';
 
     let result: InsightResult;
     try {
-      result = JSON.parse(clean);
+      result = JSON.parse(text);
     } catch {
       console.error('[/api/insights] JSON parse failed:', text);
       result = FALLBACK;
