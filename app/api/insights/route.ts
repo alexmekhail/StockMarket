@@ -110,8 +110,8 @@ Intraday Range Position: ${intradayPosition}`;
     });
 
     if (!res.ok) {
-      console.error('[/api/insights] Gemini error:', res.status, await res.text());
-      return NextResponse.json(FALLBACK);
+      const e = await res.text();
+      return NextResponse.json({ ...FALLBACK, _s: res.status, _e: e.slice(0, 300) });
     }
 
     const data = await res.json();
