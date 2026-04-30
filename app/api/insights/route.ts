@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json({ ...FALLBACK, _s: 'no_key' });
+    return NextResponse.json(FALLBACK);
   }
 
   const now = Date.now();
@@ -112,23 +112,24 @@ Intraday Range Position: ${intradayPosition}`;
     });
 
     if (!res.ok) {
-      const e = await res.text();
-      return NextResponse.json({ ...FALLBACK, _s: res.status, _e: e.slice(0, 300) });
+      return NextResponse.json(FALLBACK);
     }
 
     const data = await res.json();
-    const text: string = data.content?.[0]?.text ?? '';
+    const raw: string = data.content?.[0]?.text ?? '';
+    // Strip markdown code fences if model wraps response despite instructions
+    const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
 
     let result: InsightResult;
     try {
       result = JSON.parse(text);
     } catch {
-      return NextResponse.json({ ...FALLBACK, _s: 'parse_fail', _raw: text.slice(0, 500) });
+      return NextResponse.json(FALLBACK);
     }
 
     cache.set(ticker, result);
     return NextResponse.json(result);
-  } catch (err) {
-    return NextResponse.json({ ...FALLBACK, _s: 'exception', _e: String(err) });
+  } catch {
+    return NextResponse.json(FALLBACK);
   }
 }
