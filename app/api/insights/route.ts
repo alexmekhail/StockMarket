@@ -62,8 +62,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (!process.env.GEMINI_API_KEY) {
-    console.error('[/api/insights] GEMINI_API_KEY not set');
-    return NextResponse.json(FALLBACK);
+    return NextResponse.json({ ...FALLBACK, _s: 'no_key' });
   }
 
   const now = Date.now();
@@ -110,8 +109,8 @@ Intraday Range Position: ${intradayPosition}`;
     });
 
     if (!res.ok) {
-      console.error('[/api/insights] Gemini error:', res.status, await res.text());
-      return NextResponse.json(FALLBACK);
+      const e = await res.text();
+      return NextResponse.json({ ...FALLBACK, _s: res.status, _e: e.slice(0, 400) });
     }
 
     const data = await res.json();
