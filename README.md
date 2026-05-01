@@ -1,16 +1,27 @@
 # Market Terminal
 
-A real-time stock market dashboard with a Bloomberg/trading-terminal aesthetic. Built with Next.js 14, Supabase, and Alpaca Markets API.
+A real-time stock market dashboard with a Bloomberg/trading-terminal aesthetic, powered by live WebSocket data and AI-driven stock analysis.
+
+**Live demo → [stock-market-dashboard-sage.vercel.app](https://stock-market-dashboard-sage.vercel.app)**
+
+![Market Terminal Dashboard](public/screenshot.png)
+
+---
 
 ## Features
 
-- **Live ticker bar** — scrolling marquee with real-time prices for 8 default tickers via WebSocket
-- **Stock search** — search any ticker, navigate to a detail page
-- **Price history chart** — intraday/weekly/monthly line charts via lightweight-charts
-- **News feed** — latest news per ticker from Alpaca's news API
-- **Watchlist** — add/remove tickers; live prices update via WebSocket (auth required)
+- **Live ticker bar** — scrolling marquee with real-time prices via WebSocket
+- **Market heatmap** — sector-grouped tiles sized by market cap, colored by daily change; click any tile to open the stock detail panel
+- **Stock detail page** — price chart (1D / 1W / 1M), OHLV stats, news feed, and AI insights
+- **AI stock insights** — Claude-powered analysis with signal (Strong Buy → Strong Sell), confidence score, sentiment, and 4 data-driven reasoning bullets
+- **Crypto support** — real-time prices and charts for major cryptocurrencies
+- **News feed** — latest articles per ticker from Alpaca's news API
+- **Stock search** — search any ticker by symbol or company name
+- **Watchlist** — add/remove tickers with live price updates (auth required)
 - **Portfolio tracker** — track positions with real-time P&L calculations (auth required)
 - **Supabase Auth** — email/password sign in & sign up
+
+---
 
 ## Stack
 
@@ -21,17 +32,66 @@ A real-time stock market dashboard with a Bloomberg/trading-terminal aesthetic. 
 | Charts | lightweight-charts v4 |
 | Auth & DB | Supabase (Postgres + Auth) |
 | Market data | Alpaca Markets API (REST + WebSocket) |
+| AI analysis | Anthropic Claude (claude-haiku-4-5) |
 | Deployment | Vercel |
 
 ---
 
-## Prerequisites
+## Project Structure
 
-1. **Alpaca Markets** account — [alpaca.markets](https://alpaca.markets)  
-   Get your API Key ID and Secret from the dashboard. The free tier (IEX feed) is sufficient.
+```
+app/
+├── api/
+│   ├── insights/route.ts           # AI stock analysis (Anthropic API)
+│   ├── snapshots/route.ts          # Batch price snapshots
+│   ├── crypto/
+│   │   ├── bars/route.ts           # Crypto historical bars
+│   │   └── snapshots/route.ts      # Crypto price snapshots
+│   ├── stock/[ticker]/
+│   │   ├── bars/route.ts           # Historical bar data
+│   │   ├── news/route.ts           # News articles
+│   │   └── snapshot/route.ts       # Single-stock snapshot
+│   ├── watchlist/route.ts          # Watchlist CRUD
+│   ├── portfolio/route.ts          # Portfolio CRUD
+│   └── news/route.ts               # General news feed
+├── stock/[ticker]/page.tsx         # Stock detail page
+├── crypto/[symbol]/page.tsx        # Crypto detail page
+├── search/page.tsx                 # Ticker search
+├── watchlist/page.tsx              # Watchlist page
+├── layout.tsx
+└── page.tsx                        # Home (heatmap + overview)
 
-2. **Supabase** project — [supabase.com](https://supabase.com)  
-   Get your project URL, anon key, and service role key.
+components/
+├── StockHeatmap.tsx                # Sector heatmap with treemap layout
+├── StockDetailPanel.tsx            # Slide-in stock detail panel
+├── StockInsights.tsx               # AI analysis panel
+├── StockChart.tsx                  # lightweight-charts wrapper
+├── NewsPanel.tsx                   # News feed
+├── MarketOverview.tsx              # Indices + sector overview
+├── TickerBar.tsx                   # Scrolling live ticker marquee
+├── Watchlist.tsx                   # Watchlist panel
+├── PortfolioTable.tsx              # Portfolio table with live P&L
+├── SearchBar.tsx                   # Ticker search input
+├── Header.tsx                      # Top nav
+├── AuthProvider.tsx                # Supabase auth context + useAuth hook
+├── AuthModal.tsx                   # Sign in / sign up modal
+├── AddPositionModal.tsx            # Add/edit portfolio position
+├── PriceDisplay.tsx                # Formatted price + change
+└── Skeleton.tsx                    # Loading skeleton components
+
+lib/
+├── alpaca.ts                       # Alpaca REST helpers
+├── alpacaSocket.ts                 # WebSocket singleton manager
+├── tickers.ts                      # Tracked ticker list
+├── treemap.ts                      # Heatmap layout algorithm
+├── supabase.ts                     # Browser Supabase client
+├── supabase-server.ts              # Server Supabase client (API routes)
+└── utils.ts                        # Price formatting, date helpers
+
+types/index.ts                      # Shared TypeScript interfaces
+middleware.ts                       # Supabase session refresh
+supabase-schema.sql                 # Database schema + RLS policies
+```
 
 ---
 
@@ -40,7 +100,7 @@ A real-time stock market dashboard with a Bloomberg/trading-terminal aesthetic. 
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/your-username/StockMarket.git
+git clone https://github.com/alexmekhail/StockMarket.git
 cd StockMarket
 npm install
 ```
@@ -67,11 +127,12 @@ NEXT_PUBLIC_ALPACA_API_SECRET=your_alpaca_secret
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# Anthropic (optional — enables AI stock insights)
+ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
-> **Security note:** The Alpaca API key/secret are used client-side for WebSocket streaming.
-> Alpaca does not offer read-only market data scopes, so use the same credentials.
-> They grant access to market data only — never expose your brokerage trading credentials if those differ.
+> **Note:** If `ANTHROPIC_API_KEY` is omitted, the AI Insights panel shows a graceful fallback. All other features work without it.
 
 ### 3. Set up Supabase database
 
@@ -95,6 +156,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ```bash
 npm install -g vercel
+vercel link
 vercel --prod
 ```
 
@@ -118,50 +180,7 @@ The workflow in [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml)
 | `ALPACA_API_SECRET` | Alpaca dashboard |
 | `NEXT_PUBLIC_ALPACA_API_KEY` | Alpaca dashboard |
 | `NEXT_PUBLIC_ALPACA_API_SECRET` | Alpaca dashboard |
-
-To get your Vercel Org/Project IDs, run `vercel link` locally — it writes `.vercel/project.json`.
-
----
-
-## Project Structure
-
-```
-app/
-├── api/
-│   ├── snapshots/route.ts          # Batch price snapshots
-│   ├── stock/[ticker]/
-│   │   ├── bars/route.ts           # Historical bar data
-│   │   ├── news/route.ts           # News articles
-│   │   └── snapshot/route.ts       # Single-stock snapshot
-│   ├── watchlist/route.ts          # Watchlist CRUD
-│   └── portfolio/route.ts          # Portfolio CRUD
-├── stock/[ticker]/page.tsx         # Stock detail page
-├── layout.tsx
-└── page.tsx                        # Home (portfolio + watchlist)
-
-components/
-├── AuthProvider.tsx                # Supabase auth context + useAuth hook
-├── AuthModal.tsx                   # Sign in / sign up modal
-├── Header.tsx                      # Top nav with search + auth
-├── TickerBar.tsx                   # Scrolling live ticker marquee
-├── StockChart.tsx                  # lightweight-charts wrapper
-├── NewsPanel.tsx                   # News feed
-├── Watchlist.tsx                   # Watchlist panel
-├── PortfolioTable.tsx              # Portfolio table with live P&L
-├── AddPositionModal.tsx            # Add/edit portfolio position
-├── PriceDisplay.tsx                # Formatted price + change
-└── Skeleton.tsx                    # Loading skeleton components
-
-lib/
-├── alpaca.ts                       # Alpaca REST helpers
-├── alpacaSocket.ts                 # WebSocket singleton manager
-├── supabase.ts                     # Browser Supabase client
-├── supabase-server.ts              # Server Supabase client (API routes)
-└── utils.ts                        # Price formatting, date helpers
-
-types/index.ts                      # Shared TypeScript interfaces
-middleware.ts                       # Supabase session refresh
-```
+| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
 
 ---
 
@@ -170,21 +189,10 @@ middleware.ts                       # Supabase session refresh
 WebSocket connections are managed by a **client-side singleton** (`lib/alpacaSocket.ts`):
 
 - Connects to `wss://stream.data.alpaca.markets/v2/iex`
-- Multiple components subscribe to the same ticker — only one WS message subscription per ticker
+- Multiple components subscribe to the same ticker — only one WS subscription per ticker
 - Unsubscribes when no components are listening
-- Automatically reconnects on disconnect (3-second backoff)
-- On reconnect, re-subscribes to all active tickers
-
-Initial prices are fetched via REST (snapshots endpoint) so the UI shows data immediately before the WebSocket authenticates.
-
----
-
-## Alpaca API Notes
-
-- Uses the **IEX feed** (free tier) for both REST and WebSocket
-- WebSocket: authenticates, then subscribes to `trades` for real-time price updates
-- REST endpoints used: `snapshots`, `bars`, `news`
-- Rate limits: REST endpoints are subject to Alpaca's rate limits (200 requests/min on free tier)
+- Automatically reconnects with 3-second backoff
+- Initial prices are fetched via REST so the UI shows data before the WebSocket authenticates
 
 ---
 
@@ -200,4 +208,4 @@ watchlist (id, user_id, ticker, created_at)
 portfolio (id, user_id, ticker, shares, avg_buy_price, created_at)
 ```
 
-Both tables have Row Level Security — users can only read/write their own rows.
+Both tables use Row Level Security — users can only read and write their own rows.
